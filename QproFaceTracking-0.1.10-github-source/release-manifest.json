@@ -1,0 +1,9 @@
+{
+  "name": "QproFaceTracking",
+  "version": "0.1.10-poc",
+  "transport": "usb",
+  "bundledEyeProfile": "qpro-independent-visual-axis-v2.json",
+  "bundledTongueModel": "qpro-stereo-tongue-v8",
+  "stockMetaModelIncluded": false,
+  "status": "experimental proof of concept"
+}

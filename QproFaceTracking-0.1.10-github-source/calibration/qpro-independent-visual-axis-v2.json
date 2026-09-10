@@ -1,0 +1,190 @@
+{
+  "format": "qpro-independent-personalized-visual-axis-v2",
+  "created_unix_ns": 1786069764878123800,
+  "source": "Seacliff node 18 local per-eye branch, Meta VisualAxisDetector personalization, and physically verified detector-tag ownership",
+  "refit_from": "C:\\Users\\theli\\Documents\\QproFaceTracking\\calibration\\qpro-independent-visual-axis-v1.json",
+  "detector_tag_mapping": {
+    "physical_left": "trace_tag_1",
+    "physical_right": "trace_tag_0"
+  },
+  "mapping_constraint": "physical left and right affine mappings are fitted independently; convergence is derived only after mapping",
+  "sample_count": 5039,
+  "phases": {
+    "gaze": 2159,
+    "convergence": 2880
+  },
+  "left": {
+    "model": "independent-yaw-pitch-affine",
+    "coefficients": [
+      [
+        3.551182317801371,
+        0.8124403533314105
+      ],
+      [
+        1.0096168778940866,
+        0.0036444599404009867
+      ],
+      [
+        0.03685494334868716,
+        -1.0732783505802488
+      ]
+    ],
+    "input_order": [
+      "1",
+      "visual_yaw_deg",
+      "visual_pitch_deg"
+    ],
+    "output_order": [
+      "target_yaw_deg",
+      "target_pitch_deg"
+    ],
+    "sample_count": 2159,
+    "retained_count": 2060,
+    "holdout_count": 431,
+    "held_out": {
+      "yaw_mae_deg": 0.6104068218695855,
+      "pitch_mae_deg": 0.718365827243089,
+      "angular_mae_deg": 1.0333680849935547,
+      "angular_p95_deg": 2.2571696261991816
+    },
+    "all_samples": {
+      "yaw_mae_deg": 0.6682077094170159,
+      "pitch_mae_deg": 0.6200220697918563,
+      "angular_mae_deg": 1.0277881774490008,
+      "angular_p95_deg": 2.2705320598930694
+    },
+    "raw_range_deg": {
+      "yaw": [
+        -34.47438487569482,
+        27.765046063969457
+      ],
+      "pitch": [
+        -21.580277244956218,
+        37.5694562595031
+      ]
+    },
+    "target_range_deg": {
+      "yaw": [
+        -34.914024,
+        30.6093415309375
+      ],
+      "pitch": [
+        -39.5651778,
+        22.914033020875
+      ]
+    }
+  },
+  "right": {
+    "model": "independent-yaw-pitch-affine",
+    "coefficients": [
+      [
+        -3.3653938377617645,
+        0.5147622044928
+      ],
+      [
+        0.9430676230235703,
+        -0.012616141844585725
+      ],
+      [
+        -0.03331665023316074,
+        -1.0248739603123118
+      ]
+    ],
+    "input_order": [
+      "1",
+      "visual_yaw_deg",
+      "visual_pitch_deg"
+    ],
+    "output_order": [
+      "target_yaw_deg",
+      "target_pitch_deg"
+    ],
+    "sample_count": 2159,
+    "retained_count": 2040,
+    "holdout_count": 431,
+    "held_out": {
+      "yaw_mae_deg": 0.7884917860094476,
+      "pitch_mae_deg": 0.5422906777027098,
+      "angular_mae_deg": 1.0897750231883956,
+      "angular_p95_deg": 2.4791959910017027
+    },
+    "all_samples": {
+      "yaw_mae_deg": 0.6955973587677583,
+      "pitch_mae_deg": 0.6311649028233725,
+      "angular_mae_deg": 1.0469160859118312,
+      "angular_p95_deg": 2.2436784706436277
+    },
+    "raw_range_deg": {
+      "yaw": [
+        -32.53472864818946,
+        34.829474623313146
+      ],
+      "pitch": [
+        -22.48537040045678,
+        37.965767419986015
+      ]
+    },
+    "target_range_deg": {
+      "yaw": [
+        -33.30157,
+        32.279519996750004
+      ],
+      "pitch": [
+        -39.6452666465625,
+        22.978939975124998
+      ]
+    }
+  },
+  "derived_convergence": {
+    "gaze": {
+      "sample_count": 2159,
+      "mae_deg": 1.0840564852359196,
+      "p95_deg": 2.874525145655893,
+      "correlation": 0.3420788082733749,
+      "raw_disparity_range_deg": [
+        0.5398926534536281,
+        59.88776279882151
+      ],
+      "mapped_disparity_range_deg": [
+        -6.954939392538873,
+        50.73515287673921
+      ],
+      "target_disparity_range_deg": [
+        1.6124539999999996,
+        2.4589914904625005
+      ],
+      "distance_range_m": [
+        1.943031855021875,
+        2.0364738446062502
+      ]
+    },
+    "convergence": {
+      "sample_count": 2880,
+      "mae_deg": 1.6402754819990255,
+      "p95_deg": 4.621494850877432,
+      "correlation": 0.4155328298804225,
+      "raw_disparity_range_deg": [
+        2.3774445911683593,
+        54.04645167253231
+      ],
+      "mapped_disparity_range_deg": [
+        -4.807205082416827,
+        45.38188605432988
+      ],
+      "target_disparity_range_deg": [
+        1.6370284625937472,
+        9.4488193336
+      ],
+      "distance_range_m": [
+        0.4442513593815625,
+        2.0039814
+      ]
+    }
+  },
+  "quality_gate": {
+    "status": "partial_pass",
+    "gaze_pass": true,
+    "convergence_pass": false
+  },
+  "sample_path": "C:\\Users\\theli\\Documents\\QproFaceTracking\\calibration\\qpro-independent-visual-axis-v2.samples.jsonl"
+}

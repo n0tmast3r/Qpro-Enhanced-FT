@@ -1,0 +1,18 @@
+{
+  "InstallationState": 0,
+  "ModuleId": "7f9be083-a4f1-4e30-b28a-8e6ec878d583",
+  "LastUpdated": "2026-08-06T00:00:00Z",
+  "Version": "0.6.0",
+  "IsLocal": true,
+  "Downloads": 0,
+  "Ratings": 0,
+  "Rating": 0.0,
+  "AuthorName": "QproFaceTracking",
+  "ModuleName": "Quest Pro Independent Gaze Bridge",
+  "ModuleDescription": "Complete Virtual Desktop face reader with independent Quest Pro gaze and an opt-in fail-safe experimental tongue override.",
+  "UsageInstructions": "Use native-eye-local-branch-test.ps1 -VrcftOutput for independent gaze, or build-and-run.ps1 -TonguePreview for opt-in tongue output.",
+  "DownloadUrl": "https://github.com/benaclejames/VRCFaceTracking",
+  "ModulePageUrl": "https://github.com/benaclejames/VRCFaceTracking",
+  "DllFileName": "Qpro.GazeBridge.dll",
+  "FileHash": null
+}

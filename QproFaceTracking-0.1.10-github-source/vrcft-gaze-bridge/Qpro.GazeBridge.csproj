@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <VrcftInstallDir Condition="'$(VrcftInstallDir)' == ''">H:\SteamLibrary\steamapps\common\VRCFaceTracking</VrcftInstallDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="VRCFaceTracking.Core">
+      <HintPath>$(VrcftInstallDir)\VRCFaceTracking.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VRCFaceTracking.SDK">
+      <HintPath>$(VrcftInstallDir)\VRCFaceTracking.SDK.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.Extensions.Logging.Abstractions">
+      <HintPath>$(VrcftInstallDir)\Microsoft.Extensions.Logging.Abstractions.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="module.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <Target Name="PackageModule" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <PackageFolder>$(OutputPath)package</PackageFolder>
+      <PackageFile>$(OutputPath)Qpro.GazeBridge.zip</PackageFile>
+    </PropertyGroup>
+    <RemoveDir Directories="$(PackageFolder)" />
+    <MakeDir Directories="$(PackageFolder)" />
+    <Copy SourceFiles="$(TargetPath);$(OutputPath)module.json" DestinationFolder="$(PackageFolder)" />
+    <Delete Files="$(PackageFile)" />
+    <ZipDirectory SourceDirectory="$(PackageFolder)" DestinationFile="$(PackageFile)" />
+  </Target>
+</Project>
