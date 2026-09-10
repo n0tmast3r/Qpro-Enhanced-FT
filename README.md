@@ -1,5 +1,8 @@
 # QproFaceTracking
 
+## Showcase/Video Walkthrough
+<video src="https://github.com/n0tmast3r/Qpro-Enhanced-FT/raw/refs/heads/main/TongueTrackingWalkthough.mp4" width="100%" controls></video>
+
 ## Download
 
 For normal use, download the complete `QproFaceTracking-<version>-poc.zip` package
