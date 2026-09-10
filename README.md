@@ -44,14 +44,7 @@ rooted Quest Pro and currently supports USB only.
    file associations, or PATH entries. PyTorch is a large download, but later
    release folders reuse the same runtime. Setup uses PyTorch's official CUDA 12.8
    wheel when an NVIDIA driver/GPU is detected and the official CPU wheel
-   otherwise. If you upgraded from v0.1.5 and training reports CPU fallback despite
-   having NVIDIA hardware, run this step again to repair the earlier CPU-only
-   runtime.
-
-The PC-runtime status becomes green only after OpenCV, NumPy, and PyTorch all pass
-their final import check. Merely finding a partially created `python.exe` is not
-considered complete. An interrupted or failed setup can be retried with the same
-button; it reuses the private Python installation and repairs the environment.
+   otherwise.
 4. Close VRCFaceTracking, then select **Install/update bridge**. Restart VRCFT.
 5. For independent gaze, connect the rooted headset and select **Prepare gaze from
    headset**. The tool reads the stock eye archive from *your headset*, creates the
@@ -60,24 +53,6 @@ button; it reuses the private Python installation and repairs the environment.
 7. Choose gaze and/or tongue tracking, select profiles and settings, then press
    **Apply and start selected**.
 8. Press **Stop and restore stock** before disconnecting USB or closing the app.
-
-Opening the hub does not modify tracking. The hub checks every prerequisite before
-Apply. If a tracking window is still closing, press `Q` in that window and wait for
-the activity panel to confirm restoration.
-
-The setup page marks completed steps in green and pulses the first unfinished
-action. Successful setup and model training show a confirmation and play a short
-sound; a warning sound accompanies an Apply attempt whose prerequisites are not
-ready. A setup progress strip appears only while a first-time action is active and
-animates during long operations such as the initial private-runtime installation.
-The setup and personalization pages scroll independently at high Windows
-DPI scaling, and the setup cards use DPI-aware sizing to keep their descriptions
-and buttons visible.
-
-Before gaze preparation starts, the hub checks the headset connection and root
-access separately. A missing, offline, or unauthorized ADB device produces direct
-USB/debugging guidance; a visible headset that rejects `su` produces separate
-root/Magisk guidance instead of a generic script error.
 
 Tongue training automatically selects CUDA when PyTorch can access it and falls
 back to CPU instead of failing on systems without NVIDIA graphics. The
