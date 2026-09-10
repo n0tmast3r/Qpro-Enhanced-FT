@@ -1,7 +1,7 @@
 # Quest Pro Tongue + Eye Convergence Tracking
 
 ## [Watch the demo!](https://youtu.be/BR_hIHFeo80)
-[![Watch the demo](https://github.com/user-attachments/assets/bfd55327-6d08-47b5-b64e-72c5789ae26c)](https://youtu.be/BR_hIHFeo80)
+[![Watch the demo](https://github.com/user-attachments/assets/df6e8aab-7081-449b-bb0d-14f7e286a5b3)](https://youtu.be/BR_hIHFeo80)
 
 ## Download
 
