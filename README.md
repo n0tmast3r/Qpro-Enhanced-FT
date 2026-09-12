@@ -3,6 +3,9 @@
 ## [Watch the demo!](https://youtu.be/BR_hIHFeo80)
 [![Watch the demo](https://github.com/user-attachments/assets/df6e8aab-7081-449b-bb0d-14f7e286a5b3)](https://youtu.be/BR_hIHFeo80)
 
+## ROOT IS REQUIRED FOR THIS TO FUNCITON. IF YOU ARE NOT ON v2.6 OR LOWER THIS WILL NOT WORK
+[Root details](https://github.com/Lumince/singularity)
+
 ## Download
 
 For normal use, download the complete `QproFaceTracking-<version>-poc.zip` package
