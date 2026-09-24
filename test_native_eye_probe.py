@@ -10,11 +10,45 @@ from native_raw_eye_probe import (
     PreMergeParser,
     RawEyeSample,
     TracePairParser,
+    VisualAxisPairParser,
     float_from_trace_hex,
 )
 
 
 class NativeEyeProbeTests(unittest.TestCase):
+    def test_visual_axis_parser_decodes_both_eyes_from_one_publisher(self) -> None:
+        parser = VisualAxisPairParser()
+        line = (
+            "FaceCam-10 [001] .... 12.500000: eye_visual_axis: (0x1) "
+            "lx=0x3f000000 ly=0xbe800000 lz=0x3f800000 "
+            "rx=0xbf000000 ry=0x3e800000 rz=0x3f800000"
+        )
+        sample = parser.parse(line, 99)
+        self.assertIsNotNone(sample)
+        assert sample is not None
+        self.assertEqual(sample.pc_monotonic_ns, 99)
+        self.assertEqual(sample.kernel_time_s, 12.5)
+        self.assertEqual(sample.left_vector, (0.5, -0.25, 1.0))
+        self.assertEqual(sample.right_vector, (-0.5, 0.25, 1.0))
+        self.assertTrue(sample.valid)
+        self.assertIsNone(parser.parse(line, 100))
+        changed = parser.parse(line.replace("rx=0xbf000000", "rx=0xbe800000"), 101)
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertEqual(changed.left_vector, sample.left_vector)
+        self.assertEqual(changed.right_vector, (-0.25, 0.25, 1.0))
+
+    def test_visual_axis_parser_ignores_incomplete_or_unrelated_events(self) -> None:
+        parser = VisualAxisPairParser()
+        for line in (
+            "FaceCam-10 [001] .... 12.500000: eye_visual_axis: (0x1) "
+            "lx=0x3f000000 ly=0x00000000 lz=0x3f800000",
+            "FaceCam-10 [001] .... 12.500000: detector_output: (0x1) "
+            "x=0x3f000000 y=0x00000000 z=0x3f800000 tag=0x61630000",
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(parser.parse(line, 99))
+
     def test_trace_cleanup_uses_eof_instead_of_remote_pkill(self) -> None:
         source = Path("native_raw_eye_probe.py").read_text(encoding="utf-8")
         self.assertIn("free_buffer", source)

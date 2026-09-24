@@ -56,6 +56,11 @@ DETECTOR_SAMPLE = re.compile(
     r"x=0x(?P<x>[0-9a-fA-F]+) y=0x(?P<y>[0-9a-fA-F]+) "
     r"z=0x(?P<z>[0-9a-fA-F]+) tag=0x(?P<tag>[0-9a-fA-F]+)"
 )
+VISUAL_AXIS_SAMPLE = re.compile(
+    r"(?P<time>\d+\.\d+): eye_visual_axis: .*?"
+    r"lx=0x(?P<lx>[0-9a-fA-F]+) ly=0x(?P<ly>[0-9a-fA-F]+) lz=0x(?P<lz>[0-9a-fA-F]+) "
+    r"rx=0x(?P<rx>[0-9a-fA-F]+) ry=0x(?P<ry>[0-9a-fA-F]+) rz=0x(?P<rz>[0-9a-fA-F]+)"
+)
 
 
 def float_from_trace_hex(value: str) -> float:
@@ -221,6 +226,72 @@ class DetectorOutputParser:
             left_vector=left_vector,
             right_vector=right_vector,
         )
+
+
+class VisualAxisPairParser:
+    """Both eyes' published visual_axis from a single publish() probe line.
+
+    Used on builds where the detector_output offsets do not map (e.g. Horizon OS
+    2.7.0). One trace line carries element[0] and element[1] of the eyeDataVector;
+    with the node 50->18 model patch active these are the independent per-eye
+    axes. Left/right follow element order because byte-0 is not a stable L/R tag on
+    this build; swap here if a wearer reports mirrored eyes.
+    """
+
+    def __init__(self) -> None:
+        self._last_signature: tuple[object, ...] | None = None
+
+    def parse(self, line: str, pc_monotonic_ns: int) -> RawEyeSample | None:
+        match = VISUAL_AXIS_SAMPLE.search(line)
+        if not match:
+            return None
+        left = tuple(
+            float_from_trace_hex(match.group(axis)) for axis in ("lx", "ly", "lz")
+        )
+        right = tuple(
+            float_from_trace_hex(match.group(axis)) for axis in ("rx", "ry", "rz")
+        )
+        signature = (left, right)
+        if signature == self._last_signature:
+            return None
+        self._last_signature = signature
+        return RawEyeSample(
+            pc_monotonic_ns=pc_monotonic_ns,
+            kernel_time_s=float(match.group("time")),
+            left_valid=True,
+            right_valid=True,
+            left_vector=left,  # type: ignore[arg-type]
+            right_vector=right,  # type: ignore[arg-type]
+        )
+
+
+# Firmware-specific eye-trace probes keyed by libtrackingengines.so size. Each
+# profile names the uprobe file offset (== vaddr; the exec segment loads at 0),
+# the tracefs fetch spec, the trace event name, and the parser for its lines.
+ENGINE_PROFILES: dict[int, dict[str, object]] = {
+    # Reference build the detector_output offsets were derived from (2026-08-05).
+    47_724_232: {
+        "event": "detector_output",
+        "offset": DETECTOR_PROBE_OFFSET,
+        "fetch": ("x=+0x30(%sp):x32 y=+0x34(%sp):x32 z=+0x38(%sp):x32 "
+                  "tag=+0x0(%x19):x32"),
+        "parser": DetectorOutputParser,
+    },
+    # Horizon OS 2.7.0 (build 51503870024400340). detector_output offsets do not
+    # map to this build; read the per-eye visual_axis that lands in each EyeData
+    # instead. eyeDataVector base is x23 in VisionInterfaceResultsPublisher::publish;
+    # element stride 0x570, raw_gaze.visual_axis at +0x300 (3-float unit vector).
+    # The node 50->18 model patch makes the two axes independent.
+    47_418_280: {
+        "event": "eye_visual_axis",
+        "offset": 0x9AF054,
+        "fetch": ("lx=+0x300(%x23):x32 ly=+0x304(%x23):x32 lz=+0x308(%x23):x32 "
+                  "rx=+0x870(%x23):x32 ry=+0x874(%x23):x32 rz=+0x878(%x23):x32"),
+        "parser": VisualAxisPairParser,
+    },
+}
+
+
 class PersistentAdbRootShell:
     """One live Magisk shell for tracefs control commands.
 
@@ -337,6 +408,7 @@ class RawTraceEyeReader:
         self._configured = False
         self._clock = KernelToPcMonotonicClock()
         self._root_shell: PersistentAdbRootShell | None = None
+        self._profile: dict[str, object] | None = None
 
     @property
     def instance_path(self) -> str:
@@ -373,7 +445,7 @@ class RawTraceEyeReader:
             return
         instance = self.instance_path
         self._adb_root(f"echo 0 '>' {instance}/tracing_on", check=False)
-        for name in ("detector_output", "qpro_inputs", "qpro_left", "qpro_right"):
+        for name in ("detector_output", "eye_visual_axis", "qpro_inputs", "qpro_left", "qpro_right"):
             self._adb_root(
                 f"echo 0 '>' {instance}/events/{TRACE_GROUP}/{name}/enable",
                 check=False,
@@ -431,22 +503,25 @@ class RawTraceEyeReader:
             engine_size = int(size_result.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError) as error:
             raise RuntimeError("Could not verify the headset tracking-engine build") from error
-        if engine_size != EXPECTED_ENGINE_SIZE:
+        profile = ENGINE_PROFILES.get(engine_size)
+        if profile is None:
             raise RuntimeError(
-                f"Tracking-engine size changed ({engine_size}, expected "
-                f"{EXPECTED_ENGINE_SIZE}); do not use firmware-specific probe offsets"
+                f"Unrecognised tracking-engine size {engine_size}; no probe profile "
+                f"is registered for this build (known: {sorted(ENGINE_PROFILES)}). "
+                "Refusing to reuse another build's offsets."
             )
+        self._profile = profile
 
         self._cleanup()
         self._adb_root(f"mkdir {self.instance_path}")
         try:
+            event = self._profile["event"]
             self._write_event(
-                f"p:{TRACE_GROUP}/detector_output {ENGINE_PATH}:0x{DETECTOR_PROBE_OFFSET:x} "
-                "x=+0x30(%sp):x32 y=+0x34(%sp):x32 z=+0x38(%sp):x32 "
-                "tag=+0x0(%x19):x32"
+                f"p:{TRACE_GROUP}/{event} {ENGINE_PATH}:0x{self._profile['offset']:x} "
+                f"{self._profile['fetch']}"
             )
             self._adb_root(
-                f"echo 1 '>' {self.instance_path}/events/{TRACE_GROUP}/detector_output/enable"
+                f"echo 1 '>' {self.instance_path}/events/{TRACE_GROUP}/{event}/enable"
             )
             self._adb_root(f"echo 1 '>' {self.instance_path}/tracing_on")
             self._configured = True
@@ -474,7 +549,7 @@ class RawTraceEyeReader:
 
     def _read(self) -> None:
         assert self._process is not None and self._process.stdout is not None
-        parser = DetectorOutputParser()
+        parser = self._profile["parser"]()
         try:
             for line in self._process.stdout:
                 if self._stopping:
