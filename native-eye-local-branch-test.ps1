@@ -14,7 +14,8 @@ param(
     [int]$ConvergenceSeconds = 80,
     [ValidateRange(0, 30)]
     [int]$HeadlessSeconds = 0,
-    [string]$StopFile = ""
+    [string]$StopFile = "",
+    [double]$VergenceGain = 1.0
 )
 
 $ErrorActionPreference = "Stop"
@@ -178,6 +179,10 @@ try {
                 (Resolve-WorkspacePath $StopFile)
             )
         }
+        $runtimeArguments += @(
+            "--vergence-gain",
+            $VergenceGain.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        )
         & $python @runtimeArguments
     }
     elseif ($Calibrate) {

@@ -1,5 +1,7 @@
 import math
+import socket
 import struct
+import time
 import unittest
 
 import numpy as np
@@ -9,6 +11,8 @@ from independent_visual_axis_runtime import (
     PACKET_MAGIC,
     PACKET_SIZE,
     PACKET_VERSION,
+    VergenceControl,
+    amplify_vergence,
     calibrated_angles,
     encode_packet,
     vrcft_angles,
@@ -17,6 +21,29 @@ from native_raw_eye_probe import RawEyeSample
 
 
 class RuntimeContractTests(unittest.TestCase):
+    def test_vergence_gain_preserves_mean_gaze_and_scales_eye_separation(self):
+        left = np.asarray([10.0, -5.0])
+        right = np.asarray([-20.0, 7.0])
+        for gain in (0.0, 1.0, 2.0, 4.0):
+            with self.subTest(gain=gain):
+                scaled_left, scaled_right = amplify_vergence(left, right, gain)
+                np.testing.assert_allclose((scaled_left + scaled_right) / 2.0, [-5.0, 1.0])
+                np.testing.assert_allclose(scaled_right - scaled_left, [-30.0 * gain, 12.0 * gain])
+        np.testing.assert_array_equal(left, [10.0, -5.0])
+        np.testing.assert_array_equal(right, [-20.0, 7.0])
+
+    def test_vergence_control_updates_gain_over_localhost_udp(self):
+        control = VergenceControl(1.0, port=0)
+        self.addCleanup(control.close)
+        self.assertIsNotNone(control._socket)
+        assert control._socket is not None
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(b"2.5", control._socket.getsockname())
+        deadline = time.monotonic() + 1.0
+        while control.gain != 2.5 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(control.gain, 2.5)
+
     def test_v2_calibration_maps_detector_tags_to_physical_eyes(self):
         identity = {"coefficients": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]}
         calibration = {

@@ -153,6 +153,8 @@ internal sealed class HubForm : Form
     private readonly Label _tongueModelNote = new() { AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = Color.FromArgb(207, 190, 190), Margin = new Padding(24, 2, 0, 4) };
     private readonly ComboBox _fps = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 76 };
     private readonly DarkSlider _smoothing = new() { Minimum = 0, Maximum = 100, Value = 55, Width = 180, Height = 30 };
+    private readonly DarkSlider _vergence = new() { Minimum = 10, Maximum = 40, Value = 20, Width = 150, Height = 30 };
+    private readonly System.Net.Sockets.UdpClient _vergenceControl = new();
     private readonly ComboBox _visibilityMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 265 };
     private readonly Label _usbStatus = StatusLabel();
     private readonly Label _steamStatus = StatusLabel();
@@ -213,6 +215,16 @@ internal sealed class HubForm : Form
         _stop.Click += async (_, _) => await StopTrackingAsync();
         _gaze.CheckedChanged += (_, _) => UpdateControlState();
         _tongue.CheckedChanged += (_, _) => UpdateControlState();
+        _vergence.ValueChanged += (_, _) =>
+        {
+            try
+            {
+                var msg = System.Text.Encoding.ASCII.GetBytes(
+                    (_vergence.Value / 10.0).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                _vergenceControl.Send(msg, msg.Length, "127.0.0.1", 27276);
+            }
+            catch { }
+        };
         _tongueModels.SelectedIndexChanged += (_, _) => UpdateTongueModelNote();
         _fps.Items.AddRange(["12", "15", "18", "20", "24", "30", "36", "48", "60", "72"]);
         _fps.SelectedItem = "24";
@@ -281,6 +293,10 @@ internal sealed class HubForm : Form
         tracking.Controls.Add(_gaze, 0, 1); tracking.SetColumnSpan(_gaze, 3);
         tracking.Controls.Add(new Label { Text = "Eye profile", AutoSize = true, ForeColor = Muted, Margin = new Padding(24, 8, 12, 4) }, 0, 2);
         tracking.Controls.Add(_eyeProfiles, 1, 2);
+        var vergencePanel = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        vergencePanel.Controls.Add(new Label { Text = "Eye vergence", AutoSize = true, ForeColor = Muted, Margin = new Padding(12, 8, 6, 4) });
+        vergencePanel.Controls.Add(_vergence);
+        tracking.Controls.Add(vergencePanel, 2, 2);
         tracking.Controls.Add(_tongue, 0, 3); tracking.SetColumnSpan(_tongue, 3);
         tracking.Controls.Add(new Label { Text = "Tongue model", AutoSize = true, ForeColor = Muted, Margin = new Padding(24, 8, 12, 4) }, 0, 4);
         tracking.Controls.Add(_tongueModels, 1, 4);
@@ -749,7 +765,7 @@ internal sealed class HubForm : Form
             if (_gaze.Checked)
             {
                 var eye = (FileChoice)_eyeProfiles.SelectedItem!;
-                StartManaged("Independent gaze", "native-eye-local-branch-test.ps1", "-RuntimePreview", "-VrcftOutput", "-CalibrationOutput", eye.Primary, "-StopFile", _stopFile);
+                StartManaged("Independent gaze", "native-eye-local-branch-test.ps1", "-RuntimePreview", "-VrcftOutput", "-CalibrationOutput", eye.Primary, "-VergenceGain", (_vergence.Value / 10.0).ToString(System.Globalization.CultureInfo.InvariantCulture), "-StopFile", _stopFile);
                 AppendLog("Waiting for Meta trackingservice to return before starting cameras…");
                 await Task.Delay(7000);
                 if (_trackingProcesses.Any(p => p.HasExited)) throw new InvalidOperationException("The independent-gaze process exited during startup. See Activity.");
@@ -1375,6 +1391,7 @@ internal sealed class HubForm : Form
         _tongueModels.Enabled = _tongue.Checked;
         _fps.Enabled = _tongue.Checked;
         _smoothing.Enabled = _tongue.Checked;
+        _vergence.Enabled = _gaze.Checked;
         _visibilityMode.Enabled = _tongue.Checked;
         var running = _trackingProcesses.Any(p => !p.HasExited);
         _start.Enabled = !running && !_stopping;
@@ -1722,6 +1739,7 @@ internal sealed class TextPromptDialog : Form
 internal sealed class DarkSlider : Control
 {
     private int _value;
+    public event EventHandler? ValueChanged;
     [DefaultValue(0)]
     public int Minimum { get; set; }
     [DefaultValue(100)]
@@ -1730,7 +1748,14 @@ internal sealed class DarkSlider : Control
     public int Value
     {
         get => _value;
-        set { _value = Math.Clamp(value, Minimum, Maximum); Invalidate(); }
+        set
+        {
+            var clamped = Math.Clamp(value, Minimum, Maximum);
+            if (clamped == _value) return;
+            _value = clamped;
+            Invalidate();
+            ValueChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public DarkSlider()

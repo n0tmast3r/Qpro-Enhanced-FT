@@ -9,6 +9,7 @@ import math
 import queue
 import socket
 import struct
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ PACKET_VERSION = 1
 PACKET_FORMAT = "<4sBBHffff"
 PACKET_SIZE = struct.calcsize(PACKET_FORMAT)
 DEFAULT_PORT = 27275
+CONTROL_PORT = 27276
 
 
 def load_calibration(path: str | Path) -> dict[str, Any]:
@@ -79,6 +81,32 @@ def vrcft_angles(angles_deg: np.ndarray) -> tuple[float, float]:
     return math.radians(yaw), math.radians(pitch)
 
 
+def load_vergence_gain(root: Path) -> float:
+    """Per-wearer vergence exaggeration.
+
+    The bundled calibration under-fits convergence (convergence_pass=false), so
+    allow scaling how far each eye diverges from the mean gaze. 1.0 = as
+    calibrated; >1 exaggerates convergence/divergence. Edit eye-vergence-gain.txt
+    next to this script to tune without a rebuild.
+    """
+    try:
+        text = (root / "eye-vergence-gain.txt").read_text(encoding="utf-8")
+        return max(0.0, min(10.0, float(text.split()[0])))
+    except Exception:
+        return 1.0
+
+
+def amplify_vergence(
+    left: np.ndarray, right: np.ndarray, gain: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Scale each eye's deviation from the mean gaze by `gain`: keeps where you
+    look, exaggerates how much the eyes converge/diverge."""
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    mean = (left + right) / 2.0
+    return mean + (left - mean) * gain, mean + (right - mean) * gain
+
+
 def encode_packet(
     left_deg: np.ndarray,
     right_deg: np.ndarray,
@@ -118,11 +146,52 @@ class GazeBroadcaster:
         self._socket.close()
 
 
+class VergenceControl:
+    """Live vergence gain over a localhost UDP control channel.
+
+    A daemon thread blocks on recv and updates the gain only when the hub sends a
+    new value: event-driven, no polling. The render loop just reads `.gain` (a
+    plain float read). If the port is unavailable the initial gain is kept.
+    """
+
+    def __init__(self, initial: float, port: int = CONTROL_PORT) -> None:
+        self.gain = float(initial)
+        self._socket: socket.socket | None = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", port))
+            self._socket = sock
+            threading.Thread(target=self._listen, daemon=True).start()
+        except OSError:
+            self._socket = None
+
+    def _listen(self) -> None:
+        assert self._socket is not None
+        while True:
+            try:
+                data, _ = self._socket.recvfrom(64)
+            except OSError:
+                return
+            try:
+                value = float(data.decode("ascii", "ignore").strip())
+            except ValueError:
+                continue
+            if 0.0 <= value <= 10.0:
+                self.gain = value
+
+    def close(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--adb", required=True)
     parser.add_argument("--calibration", required=True)
     parser.add_argument("--output-vrcft", action="store_true")
+    parser.add_argument("--vergence-gain", type=float, default=None,
+                        help="scale each eye's deviation from mean gaze (1.0 = as calibrated)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--headless-seconds", type=float, default=0.0)
     parser.add_argument(
@@ -135,6 +204,13 @@ def main() -> int:
         raise ValueError("Port is outside the supported range")
 
     calibration = load_calibration(arguments.calibration)
+    vergence_gain = (
+        arguments.vergence_gain
+        if arguments.vergence_gain is not None
+        else load_vergence_gain(Path(__file__).resolve().parent)
+    )
+    vergence = VergenceControl(vergence_gain)
+    print(f"vergence gain = {vergence_gain:.2f} (live on udp/{CONTROL_PORT})")
     reader = RawTraceEyeReader(arguments.adb)
     eye_filter = IndependentEyeFilter(
         2,
@@ -179,6 +255,11 @@ def main() -> int:
                 filtered_left, filtered_right = eye_filter.update(
                     left, right, sample.pc_monotonic_ns / 1_000_000_000.0
                 )
+                gain = vergence.gain
+                if gain != 1.0:
+                    filtered_left, filtered_right = amplify_vergence(
+                        filtered_left, filtered_right, gain
+                    )
                 if broadcaster is not None:
                     broadcaster.send(filtered_left, filtered_right)
                 rate_count += 1
@@ -273,6 +354,7 @@ def main() -> int:
             }))
         return 0
     finally:
+        vergence.close()
         if broadcaster is not None:
             broadcaster.close()
         reader.close()
