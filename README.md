@@ -75,6 +75,32 @@ If gaze startup was interrupted, the next launch automatically removes the stale
 headset trace reader before applying the independent-eye branch. You should not
 need to reboot the headset or manually clean tracefs.
 
+## Network camera source
+
+Instead of USB, camera frames can come over the network from an MJPEG server, for
+example an app running on the rooted headset. In the hub, set **Headset camera
+source** to Wi-Fi and enter the server's IP and port, or run
+`build-and-run.ps1 -NetworkUrl http://<ip>:<port>` with the usual `-CameraMode`.
+Independent gaze still needs ADB (USB or wireless).
+
+The server must provide `multipart/x-mixed-replace` MJPEG streams with a
+`Content-Length` on every part. Each frame holds 400x400 8-bit grayscale camera
+panels side by side, in the same order as the USB relay (0 left eye, 1 right eye,
+2 left face, 3 right face, 4 center eyebrow):
+
+| `-CameraMode` | Path | Cameras | Frame |
+| --- | --- | --- | --- |
+| `all` | `/strip.mjpg` | 0-4 | 2000x400 |
+| `face` | `/face.mjpg` | 2-4 | 1200x400 |
+| `mouth` | `/mouth.mjpg` | 2-3 | 800x400 |
+| `eyes` | `/eyes.mjpg` | 0-1 | 800x400 |
+
+Optional `X-Sequence` and `X-Timestamp-Ns` part headers carry the frame sequence
+and headset timestamp. Without them, frames are numbered and timestamped on arrival.
+
+[Quest Pro Camera Service](https://github.com/MonadoArt/Quest-Pro-Camera-Network-Relay)
+is an example headset app that provides these streams on port 27280.
+
 ## Included profiles
 
 - `Developer visual-axis mapping v2` is a demonstrator calibrated to the original

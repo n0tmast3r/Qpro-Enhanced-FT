@@ -346,6 +346,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=27273)
+    parser.add_argument("--network-url")
+    parser.add_argument("--network-mode", choices=("all", "face", "mouth", "eyes"), default="all")
     parser.add_argument("--mjpeg-port", type=int, default=8081)
     parser.add_argument("--no-window", action="store_true")
     parser.add_argument(
@@ -496,6 +498,7 @@ def main() -> int:
         daemon=True,
     ).start()
     connection: socket.socket | None = None
+    source = None
     print(f"Selected MJPEG: http://127.0.0.1:{arguments.mjpeg_port}/selected.mjpg")
     print("Per-camera MJPEG: /camera0.mjpg through /camera4.mjpg; /strip.mjpg")
 
@@ -726,9 +729,14 @@ def main() -> int:
             if open_source_preview is not None:
                 cv2.namedWindow(open_source_window_name, cv2.WINDOW_NORMAL)
                 cv2.resizeWindow(open_source_window_name, 1240, 880)
+        if arguments.network_url:
+            from network_source import NetworkFrameSource
+
+            source = NetworkFrameSource(arguments.network_url, arguments.network_mode)
+            source.connect(deadline_s=20.0, stop_file=stop_file)
         print("Connecting to headset streamer (up to 20 seconds)...")
         deadline = time.monotonic() + 20.0
-        while connection is None:
+        while connection is None and source is None:
             if stop_file is not None and stop_file.exists():
                 return 0
             try:
@@ -742,14 +750,18 @@ def main() -> int:
                         "Send the three logs."
                     )
                 time.sleep(0.25)
-        connection.settimeout(None)
-        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if connection is not None:
+            connection.settimeout(None)
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         print("Connected. Keys 0-4 select cameras; S selects strip; Q quits.")
         while shared.running:
             if stop_file is not None and stop_file.exists():
                 shared.running = False
                 break
-            raw_header = receive_exact(connection, HEADER.size)
+            if source is not None:
+                raw_header, payload = source.read_frame()
+            else:
+                raw_header = receive_exact(connection, HEADER.size)
             (magic, version, header_size, sequence, timestamp_ns, width, height,
              stride, pixel_format, payload_size, camera_mask,
              rejected_torn) = HEADER.unpack(raw_header)
@@ -764,7 +776,8 @@ def main() -> int:
                 )
             if payload_size != width * height:
                 raise ValueError("Invalid payload size")
-            payload = receive_exact(connection, payload_size)
+            if source is None:
+                payload = receive_exact(connection, payload_size)
             pc_monotonic_ns = time.monotonic_ns()
             stream_gap_stats.add(timestamp_ns, pc_monotonic_ns)
             frame_replay_stats.add(payload)
@@ -992,6 +1005,8 @@ def main() -> int:
             shared.lock.notify_all()
         if connection is not None:
             connection.close()
+        if source is not None:
+            source.close()
         server.shutdown()
         server.server_close()
         if window_created:

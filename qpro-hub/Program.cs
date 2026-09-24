@@ -138,6 +138,7 @@ internal sealed class HubForm : Form
 {
     private readonly string _root;
     private readonly string _stopFile;
+    private readonly string _cameraSourceFile;
     private readonly CheckBox _gaze = FeatureToggle("Independent eye gaze + convergence", true);
     private readonly CheckBox _tongue = FeatureToggle("Experimental tongue tracking", false);
     private readonly ComboBox _eyeProfiles = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 390 };
@@ -152,6 +153,9 @@ internal sealed class HubForm : Form
     private readonly ListBox _modelList = new() { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, IntegralHeight = false };
     private readonly Label _tongueModelNote = new() { AutoSize = true, MaximumSize = new Size(650, 0), ForeColor = Color.FromArgb(207, 190, 190), Margin = new Padding(24, 2, 0, 4) };
     private readonly ComboBox _fps = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 76 };
+    private readonly ComboBox _cameraSource = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 90 };
+    private readonly TextBox _networkIp = new() { Width = 150, BackColor = Raised, ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "192.168.x.x" };
+    private readonly TextBox _networkPort = new() { Width = 70, BackColor = Raised, ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle, MaxLength = 5, Text = "27280" };
     private readonly DarkSlider _smoothing = new() { Minimum = 0, Maximum = 100, Value = 55, Width = 180, Height = 30 };
     private readonly ComboBox _visibilityMode = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 265 };
     private readonly Label _usbStatus = StatusLabel();
@@ -197,6 +201,23 @@ internal sealed class HubForm : Form
     {
         _root = root;
         _stopFile = Path.Combine(root, ".qpro-hub-stop");
+        // Camera source settings: line 1 "usb" or "wifi", line 2 IP, line 3 port.
+        _cameraSourceFile = Path.Combine(root, ".qpro-hub-camera-source");
+        _cameraSource.Items.AddRange(["USB", "Wi-Fi"]);
+        var savedSource = File.Exists(_cameraSourceFile) ? File.ReadAllLines(_cameraSourceFile) : [];
+        _cameraSource.SelectedIndex = savedSource.Length > 0 && savedSource[0].Trim() == "wifi" ? 1 : 0;
+        if (savedSource.Length > 1) _networkIp.Text = savedSource[1].Trim();
+        if (savedSource.Length > 2 && savedSource[2].Trim().Length > 0) _networkPort.Text = savedSource[2].Trim();
+        void SaveCameraSource()
+        {
+            _networkIp.Enabled = _networkPort.Enabled = _cameraSource.SelectedIndex == 1;
+            File.WriteAllLines(_cameraSourceFile, [_cameraSource.SelectedIndex == 1 ? "wifi" : "usb", _networkIp.Text.Trim(), _networkPort.Text.Trim()]);
+        }
+        _networkIp.Enabled = _networkPort.Enabled = _cameraSource.SelectedIndex == 1;
+        _cameraSource.SelectedIndexChanged += (_, _) => SaveCameraSource();
+        _networkIp.TextChanged += (_, _) => SaveCameraSource();
+        _networkPort.TextChanged += (_, _) => SaveCameraSource();
+        _networkPort.KeyPress += (_, e) => { if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar)) e.Handled = true; };
         Text = "QproFaceTracking Hub";
         MinimumSize = new Size(1000, 800);
         Size = new Size(1140, 950);
@@ -264,7 +285,7 @@ internal sealed class HubForm : Form
         var statuses = Card();
         statuses.ColumnCount = 6;
         statuses.RowCount = 2;
-        foreach (var label in new[] { "Quest USB", "SteamVR", "VRCFaceTracking", "Combined bridge", "PC runtime", "Gaze support" })
+        foreach (var label in new[] { "Quest link", "SteamVR", "VRCFaceTracking", "Combined bridge", "PC runtime", "Gaze support" })
             statuses.Controls.Add(new Label { Text = label, AutoSize = true, ForeColor = Muted, Margin = new Padding(8, 5, 25, 2) });
         foreach (var label in new[] { _usbStatus, _steamStatus, _vrcftStatus, _bridgeStatus, _runtimeStatus, _gazeStatus })
             statuses.Controls.Add(label);
@@ -272,7 +293,7 @@ internal sealed class HubForm : Form
 
         var tracking = Card();
         tracking.ColumnCount = 3;
-        tracking.RowCount = 8;
+        tracking.RowCount = 9;
         tracking.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         tracking.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         tracking.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -288,19 +309,27 @@ internal sealed class HubForm : Form
         fpsPanel.Controls.Add(new Label { Text = "Camera FPS cap", AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 8, 8, 0) });
         fpsPanel.Controls.Add(_fps);
         tracking.Controls.Add(fpsPanel, 2, 4);
-        tracking.Controls.Add(_tongueModelNote, 0, 5); tracking.SetColumnSpan(_tongueModelNote, 3);
+        var networkPanel = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(24, 4, 0, 0) };
+        networkPanel.Controls.Add(new Label { Text = "Headset camera source", AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 5, 8, 0) });
+        networkPanel.Controls.Add(_cameraSource);
+        networkPanel.Controls.Add(new Label { Text = "IP", AutoSize = true, ForeColor = Muted, Margin = new Padding(16, 5, 6, 0) });
+        networkPanel.Controls.Add(_networkIp);
+        networkPanel.Controls.Add(new Label { Text = "Port", AutoSize = true, ForeColor = Muted, Margin = new Padding(12, 5, 6, 0) });
+        networkPanel.Controls.Add(_networkPort);
+        tracking.Controls.Add(networkPanel, 0, 5); tracking.SetColumnSpan(networkPanel, 3);
+        tracking.Controls.Add(_tongueModelNote, 0, 6); tracking.SetColumnSpan(_tongueModelNote, 3);
         var tuning = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(24, 5, 0, 0) };
         tuning.Controls.Add(new Label { Text = "Motion smoothing  Responsive", AutoSize = true, ForeColor = Muted, Margin = new Padding(0, 7, 5, 0) });
         tuning.Controls.Add(_smoothing);
         tuning.Controls.Add(new Label { Text = "Smooth", AutoSize = true, ForeColor = Muted, Margin = new Padding(4, 7, 5, 0) });
         tuning.Controls.Add(new Label { Text = "Visibility", AutoSize = true, ForeColor = Muted, Margin = new Padding(12, 7, 5, 0) });
         tuning.Controls.Add(_visibilityMode);
-        tracking.Controls.Add(tuning, 0, 6); tracking.SetColumnSpan(tuning, 3);
+        tracking.Controls.Add(tuning, 0, 7); tracking.SetColumnSpan(tuning, 3);
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 14, 0, 0) };
         actions.Controls.Add(_start); actions.Controls.Add(_stop);
         actions.Controls.Add(ActionButton("Refresh", (_, _) => { ReloadProfiles(); _ = RefreshStatusAsync(); }));
-        tracking.Controls.Add(actions, 0, 7); tracking.SetColumnSpan(actions, 2);
-        tracking.Controls.Add(_runStatus, 2, 7);
+        tracking.Controls.Add(actions, 0, 8); tracking.SetColumnSpan(actions, 2);
+        tracking.Controls.Add(_runStatus, 2, 8);
         page.Controls.Add(tracking, 0, 2);
 
         var body = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 420, BackColor = Background, Margin = new Padding(0, 12, 0, 0) };
@@ -538,7 +567,8 @@ internal sealed class HubForm : Form
     {
         var missing = new List<string>();
         if (FindAdb() is null) missing.Add("re-extract the release; bundled platform-tools\\adb.exe is missing");
-        else if (!await HasUsbQuestAsync()) missing.Add("connect and authorize the rooted Quest Pro over USB");
+        else if (NetworkUrl() is null && !await HasUsbQuestAsync()) missing.Add("connect and authorize the rooted Quest Pro over USB");
+        if (NetworkUrl() is { } captureUrl && !await CameraServiceReachableAsync(captureUrl)) missing.Add($"the network camera source at {captureUrl} — start the camera stream on the headset, for example with the Quest Pro Camera Service app");
         if (!Process.GetProcessesByName("vrserver").Any()) missing.Add("start SteamVR");
         if (!Process.GetProcessesByName("VRCFaceTracking").Any()) missing.Add("start VRCFaceTracking and confirm Virtual Desktop face tracking is flowing");
         if (!BackendReady()) missing.Add("run First-time setup: Set up PC runtime");
@@ -633,7 +663,7 @@ internal sealed class HubForm : Form
             PlaySfx("warning.wav");
             MessageBox.Show(
                 this,
-                stateHint + "\n\nConfirm that your Quest Pro is:\n\n• plugged into this PC with a USB data cable\n• awake, with Developer Mode enabled\n• authorized for USB debugging inside the headset\n\nThen press Prepare gaze again.",
+                stateHint + "\n\nConfirm that your Quest Pro is:\n\n• connected to this PC by USB data cable or wireless ADB\n• awake, with Developer Mode enabled\n• authorized for USB debugging inside the headset\n\nThen press Prepare gaze again.",
                 "Quest Pro not found over ADB",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -731,7 +761,8 @@ internal sealed class HubForm : Form
         if (!_gaze.Checked && !_tongue.Checked) { PlaySfx("warning.wav"); MessageBox.Show(this, "Select at least one tracking feature."); return; }
         var missing = new List<string>();
         if (FindAdb() is null) missing.Add("the bundled Android tools — re-extract the complete release");
-        else if (!await HasUsbQuestAsync()) missing.Add("an authorized Quest connected by USB");
+        else if ((_gaze.Checked || NetworkUrl() is null) && !await HasUsbQuestAsync()) missing.Add("an authorized Quest connected by USB");
+        if (_tongue.Checked && NetworkUrl() is { } trackingUrl && !await CameraServiceReachableAsync(trackingUrl)) missing.Add($"the network camera source at {trackingUrl} — start the camera stream on the headset, for example with the Quest Pro Camera Service app");
         if (!Process.GetProcessesByName("vrserver").Any()) missing.Add("SteamVR");
         if (!Process.GetProcessesByName("VRCFaceTracking").Any()) missing.Add("VRCFaceTracking");
         if (!BridgeInstalled()) missing.Add("the combined Qpro VRCFT bridge — use First-time setup step 2");
@@ -1202,7 +1233,11 @@ internal sealed class HubForm : Form
             UseShellExecute = false,
             CreateNoWindow = hidden,
         };
-        foreach (var value in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(_root, script) }.Concat(args))
+        var scriptArgs = args.ToList();
+        var networkUrl = NetworkUrl();
+        if (Path.GetFileName(script).Equals("build-and-run.ps1", StringComparison.OrdinalIgnoreCase) && networkUrl is not null)
+            scriptArgs.AddRange(["-NetworkUrl", networkUrl]);
+        foreach (var value in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(_root, script) }.Concat(scriptArgs))
             info.ArgumentList.Add(value);
         var python = FindPythonRuntime();
         // Runtime setup must inspect and, when necessary, repair the shared environment itself.
@@ -1217,10 +1252,12 @@ internal sealed class HubForm : Form
 
     private async Task RefreshStatusAsync()
     {
-        var usb = await HasUsbQuestAsync();
+        var networkUrl = NetworkUrl();
+        var link = networkUrl is null ? await HasUsbQuestAsync() : await CameraServiceReachableAsync(networkUrl);
         var steam = Process.GetProcessesByName("vrserver").Any();
         var vrcft = Process.GetProcessesByName("VRCFaceTracking").Any();
-        SetStatus(_usbStatus, usb ? StatusKind.Good : StatusKind.Bad, usb ? "Connected" : "Not connected");
+        var linkText = networkUrl is null ? (link ? "Connected" : "Not connected") : (link ? "Wi-Fi ready" : "Wi-Fi unreachable");
+        SetStatus(_usbStatus, link ? StatusKind.Good : StatusKind.Bad, linkText);
         SetStatus(_steamStatus, steam ? StatusKind.Good : StatusKind.Bad, steam ? "Running" : "Not running");
         SetStatus(_vrcftStatus, vrcft ? StatusKind.Good : StatusKind.Bad, vrcft ? "Running" : "Not running");
         SetStatus(_bridgeStatus, BridgeInstalled() ? StatusKind.Good : StatusKind.Warning, BridgeInstalled() ? "Installed" : "Setup needed");
@@ -1331,6 +1368,21 @@ internal sealed class HubForm : Form
 
     private bool BridgeInstalled() => File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking", "CustomLibs", "000-Qpro.IndependentGaze.dll"));
     private bool BackendReady() => FindPythonRuntime() is not null;
+    // Wi-Fi camera URL, or null when the source is USB or no IP is entered.
+    private string? NetworkUrl()
+    {
+        var ip = _networkIp.Text.Trim();
+        if (_cameraSource.SelectedIndex != 1 || ip.Length == 0) return null;
+        var port = int.TryParse(_networkPort.Text.Trim(), out var value) && value is > 0 and < 65536 ? value : 27280;
+        return $"http://{ip}:{port}";
+    }
+
+    private static readonly HttpClient CameraServiceClient = new() { Timeout = TimeSpan.FromSeconds(1.5) };
+    private static async Task<bool> CameraServiceReachableAsync(string url)
+    {
+        try { return (await CameraServiceClient.GetAsync(url + "/status")).IsSuccessStatusCode; }
+        catch { return false; }
+    }
     private bool EyeModelReady() => File.Exists(Path.Combine(_root, "research", "seacliff_eye_model", "bolt-independent-axes.ptl"));
     private string VisibilityModeValue() => _visibilityMode.SelectedIndex switch { 1 => "camera", 2 => "native", 3 => "agreement", _ => "weighted" };
 

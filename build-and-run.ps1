@@ -5,6 +5,7 @@ param(
     [switch]$RebuildManaged,
     [ValidateSet("all", "face", "eyes", "mouth")]
     [string]$CameraMode = "all",
+    [string]$NetworkUrl = "",
     [ValidateRange(0, 120)]
     [int]$MaxFps = 30,
     [ValidateRange(1024, 65535)]
@@ -85,20 +86,22 @@ function Resolve-WorkspacePath([string]$Path) {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $Path))
 }
 
-if (-not [string]::IsNullOrWhiteSpace($AdbTarget)) {
+$useNetworkSource = -not [string]::IsNullOrWhiteSpace($NetworkUrl)
+if (-not $useNetworkSource -and -not [string]::IsNullOrWhiteSpace($AdbTarget)) {
     $env:ANDROID_SERIAL = $AdbTarget.Trim()
 }
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
-$adbExecutable = Find-AdbExecutable
+$adbExecutable = $null
+if (-not $useNetworkSource) { $adbExecutable = Find-AdbExecutable }
 
 $nativeArtifacts = @(
     (Join-Path $PSScriptRoot "libquestpro-camera-streamer-v8.so"),
     (Join-Path $PSScriptRoot "questpro-camera-relay-v8"),
     (Join-Path $PSScriptRoot "questpro-camera-injector")
 )
-$needsNativeBuild = $RebuildNative -or @($nativeArtifacts | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -gt 0
+$needsNativeBuild = -not $useNetworkSource -and ($RebuildNative -or @($nativeArtifacts | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -gt 0)
 $clang = $null
 if ($needsNativeBuild) {
     $ndkRoot = $env:ANDROID_NDK_HOME
@@ -116,25 +119,27 @@ if ($needsNativeBuild) {
 Push-Location $PSScriptRoot
 try {
     Write-Host "QproFaceTracking launcher v2.35 (stream port $StreamPort)"
-    if (-not [string]::IsNullOrWhiteSpace($AdbTarget)) {
+    if (-not $useNetworkSource -and -not [string]::IsNullOrWhiteSpace($AdbTarget)) {
         $adbState = & $adbExecutable get-state 2>&1
         if ($LASTEXITCODE -ne 0 -or ($adbState -join "`n").Trim() -ne "device") {
             throw "ADB target is unavailable: $AdbTarget. Reconnect it or use USB."
         }
         Write-Host "ADB target: $AdbTarget"
     }
-    else {
+    elseif (-not $useNetworkSource) {
         $adbState = & $adbExecutable get-state 2>&1
         if ($LASTEXITCODE -ne 0 -or ($adbState -join "`n").Trim() -ne "device") {
             throw "No authorized Quest was found over ADB. Connect it by USB or pass -AdbTarget."
         }
     }
 
+    if (-not $useNetworkSource) {
     $rootProbe = & $adbExecutable shell su -c id 2>&1
     $rootProbeText = ($rootProbe -join "`n").Trim()
     if ($LASTEXITCODE -ne 0 -or $rootProbeText -notmatch 'uid=0\(root\)') {
         $transportHint = if ([string]::IsNullOrWhiteSpace($AdbTarget)) { "USB" } else { $AdbTarget }
         throw "Magisk root is not granted to Android Shell on $transportHint. On the headset open Magisk > Superuser and enable Shell (or ADB Shell), then retry. The camera relay and provider injector were not started."
+    }
     }
 
     if ($TongueCalibration -or $TongueStillCalibration -or $TongueCorrectionCalibration -or $TongueRefinementCalibration -or $TongueArcCalibration) { $CameraMode = "face" }
@@ -274,10 +279,11 @@ try {
         & $clang --target=aarch64-linux-android28 -std=c11 -O2 -Wall -Wextra -fPIE -pie "-Wl,-z,max-page-size=16384" .\injector.c -o .\questpro-camera-injector -ldl
         if ($LASTEXITCODE -ne 0) { throw "Injector compilation failed with exit code $LASTEXITCODE" }
     }
-    else {
+    elseif (-not $useNetworkSource) {
         Write-Host "Using packaged Quest Pro headset binaries."
     }
 
+    if (-not $useNetworkSource) {
     & $adbExecutable push .\libquestpro-camera-streamer-v8.so /data/local/tmp/libquestpro-camera-streamer-v8.so
     if ($LASTEXITCODE -ne 0) { throw "Pushing the streamer failed with exit code $LASTEXITCODE" }
     & $adbExecutable push .\questpro-camera-relay-v8 /data/local/tmp/questpro-camera-relay-v8
@@ -358,6 +364,7 @@ try {
 
     & $adbExecutable forward "tcp:$StreamPort" "tcp:$StreamPort"
     if ($LASTEXITCODE -ne 0) { throw "ADB port forwarding failed with exit code $LASTEXITCODE" }
+    }
 
     $capText = if ($MaxFps -eq 0) { "unlimited" } else { "$MaxFps FPS" }
     Write-Host "Transport mode: $CameraMode; cap: $capText"
@@ -369,6 +376,7 @@ try {
         }
     }
     $receiverArguments = @(".\receiver.py", "--port", "$StreamPort")
+    if ($useNetworkSource) { $receiverArguments += @("--network-url", $NetworkUrl, "--network-mode", $CameraMode) }
     if ($NoWindow) { $receiverArguments += "--no-window" }
     if ($recordEnabled) {
         $receiverArguments += "--record"
@@ -460,7 +468,7 @@ try {
             @($finalRelayLog | ForEach-Object { $_.ToString() }) | Set-Content -LiteralPath .\questpro-live-relay.txt
         }
     }
-    $null = & $adbExecutable forward --remove "tcp:$StreamPort" 2>&1
+    if (-not $useNetworkSource) { $null = & $adbExecutable forward --remove "tcp:$StreamPort" 2>&1 }
     Pop-Location
     if ($hadAndroidSerial) {
         $env:ANDROID_SERIAL = $previousAndroidSerial
