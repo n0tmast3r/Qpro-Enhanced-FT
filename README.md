@@ -14,7 +14,7 @@ automatically generated “Source code” archives do not contain the large exec
 pretrained model, private Python installer, or bundled Android tools required to
 run the application.
 
-QproFaceTracking is an experimental, USB-connected Quest Pro proof of concept for
+QproFaceTracking is an experimental, USB- or Wi-Fi-connected Quest Pro proof of concept for
 VRCFaceTracking. It keeps Virtual Desktop's normal face, brow, jaw, and blink data,
 then optionally replaces only:
 
@@ -24,7 +24,8 @@ then optionally replaces only:
   two lower-face cameras.
 
 This is enthusiast research software, not a polished consumer driver. It requires a
-rooted Quest Pro and currently supports USB only.
+rooted Quest Pro. It runs over USB, or wirelessly over ADB-on-Wi-Fi once the
+headset has been paired.
 
 ## Requirements
 
@@ -38,28 +39,112 @@ rooted Quest Pro and currently supports USB only.
 - A current NVIDIA display driver is strongly recommended for fast tongue-model
   training. NVIDIA hardware is optional; CPU training is supported but is much
   slower, especially for the full dataset.
+- GPU support for tongue tracking:
+  - **Live tracking** runs through ONNX Runtime + DirectML, so it uses any DirectX 12
+    GPU: NVIDIA, AMD or Intel. Without DirectML it falls back to PyTorch on the CPU.
+  - **Training / personalization** uses PyTorch, which is GPU-accelerated only on
+    NVIDIA (CUDA). On AMD or Intel it trains on the CPU, which works but is much slower.
+  - Tested so far on an NVIDIA RTX 5080 only; AMD should work through DirectML but has
+    not been tested yet.
 
 ## First run
-DISCLAIMER: Eye convergence may NOT work on modern firmwares, I have ONLY tested it on version `51483620027600340`
+EYE CONVERGENCE: independent eyes need a Magisk module that patches the headset's own
+eye model and turns off the eye-tracking social filter. The hub installs SergioMarquina's
+module (bundled with his permission) and, if that doesn't work on your headset, can build
+our own patch from your headset's model. No Meta files are shipped. Measured on firmware
+`51503870021300340`: the filter property alone or the model patch alone leaves the eyes
+locked together; both together free them. Tongue tracking and Wi-Fi have no firmware
+dependency.
 
 1. Extract the entire release folder. Do not run the executable from inside the zip.
 2. Double-click `QproFaceTracking.exe`.
 3. Select **Set up PC runtime**. No preinstalled Python or PATH modification is
    required. The release carries the official signed Python 3.12.10 installer and
-   silently installs a private per-user copy plus OpenCV, NumPy, and PyTorch under
+   silently installs a private per-user copy plus OpenCV, NumPy, PyTorch, and
+   ONNX Runtime (DirectML) under
    `%LOCALAPPDATA%\QproFaceTracking\runtime`. It creates no launcher, shortcuts,
    file associations, or PATH entries. PyTorch is a large download, but later
    release folders reuse the same runtime. Setup uses PyTorch's official CUDA 12.8
    wheel when an NVIDIA driver/GPU is detected and the official CPU wheel
    otherwise.
 4. Close VRCFaceTracking, then select **Install/update bridge**. Restart VRCFT.
-5. For independent gaze, connect the rooted headset and select **Prepare gaze from
-   headset**. The tool reads the stock eye archive from *your headset*, creates the
-   byte-length-preserving local patch, and deletes the temporary stock copy.
+5. Pick the **Connection** at the top of the hub — **USB** or **Wi-Fi**. This is a
+   **transport** choice (how the PC reaches the headset for the camera stream and for
+   checking the eye module); it does not change the gaze method.
+   Eye convergence comes from an **independent-eye Magisk module** on the headset.
+   First-time setup **step 3 → Manage eye module** offers, in this order:
+   - **Install Sergio's module (recommended)** — SergioMarquina's "Quest Pro Individual
+     Eye Enabler", bundled unmodified with his permission (`sergio-eye-module/`; the hub
+     checks every file's SHA-256 before installing). It patches the headset's own eye
+     model on-device. It supports one specific stock eye model, so on other firmware it
+     refuses to install.
+   - **Create my eye patch** — the fallback if Sergio's doesn't install or doesn't give
+     independent eyes. The hub reads this headset's own eye model, finds its eye-blend
+     gate from the model's structure, and builds a small Magisk module (`qpro_eye_patch`)
+     that patches your own copy on the headset, verifies it by SHA-256, mounts it at
+     boot and turns off the eye-tracking social filter. The gate patch is the default;
+     "exact rewire" is an experimental option not yet tested on a headset.
+   - Under **Advanced**: **Install module (.zip)** — pick a module zip you downloaded. The hub shows its
+     name, id, version and author from `module.prop`, asks you to confirm (and whether
+     it is your eye module or a helper another module needs, such as Magisk OverlayFS),
+     copies it to the headset and installs it with Magisk's own installer
+     (`magisk --install-module`), then remembers it if it is your eye module.
+   - Under **Advanced**: **Choose installed** — tick a module you already installed in the Magisk app.
+
+   Your modules are saved in `config/eye-modules.json`; your eye patch, "Quest Pro
+   Independent Eye Gaze" and "Quest Pro Individual Eye Enabler" are recognized out of the
+   box. Zips that contain a model file or disk image are refused. Run only **one**
+   eye-model module: if another recognized one (built in, or ticked under Choose
+   installed) is enabled, the hub offers to flag it disabled in Magisk (reversible from
+   the Magisk app); disable any other eye module yourself in the Magisk app. Do this
+   **before** starting Virtual Desktop
+   (changing eye tracking while VD streams freezes VD's face feed until VD reconnects).
+   Then reboot the headset, re-apply root if your root method needs it, and redo the
+   headset's eye-tracking calibration — the hub never reboots the headset for you. It
+   then shows "Convergence on" (or "Reboot headset" while a newly installed module is
+   waiting for the reboot and no other eye module is live); Virtual Desktop forwards the
+   independent gaze through the bridge with no PC runtime. Only install modules you trust: the hub does not check what a module does.
 6. Start Virtual Desktop, SteamVR, and VRCFT. Confirm ordinary tracking works.
-7. Choose gaze and/or tongue tracking, select profiles and settings, then press
-   **Apply and start selected**.
+7. Turn on tongue tracking if you want it, choose its settings, then press
+   **Apply and start selected**. Eye gaze runs from the eye module on the headset; Apply
+   checks it is active unless **Skip eye gaze (tongue only)** is on.
 8. Press **Stop and restore stock** before disconnecting USB or closing the app.
+
+## Wireless (ADB over Wi-Fi)
+
+Pick the connection explicitly with the **USB / Wi-Fi** toggle at the top of the
+hub (default **USB**). Camera frames and the root control channel travel inside ADB
+over Wi-Fi, so no headset binary is changed for wireless use; expect roughly
+60–90 Mbit/s upstream for live tongue cameras, so a 5 GHz / Wi-Fi 6 network
+(ideally a dedicated VR access point) is recommended alongside Virtual Desktop. The
+PC and headset must be on the same network/router.
+
+1. **Pair once over USB.** With the headset connected by USB, run
+   `enable-quest-wireless.ps1` (or just keep USB debugging authorized). This turns
+   on the headset's ADB TCP port and saves the address to
+   `config\wireless-headset.json`. Many rooted headsets already keep this port on
+   across reboots (`persist.adb.tcp.port`), in which case USB is only ever needed
+   for this first pairing.
+2. **Go wireless.** Select the **Wi-Fi** mode and press **Enable / Connect Wi-Fi** (the
+   button only appears in Wi-Fi mode).
+   With a cable attached it enables ADB-over-Wi-Fi and saves the address; unplug USB
+   and it reconnects, scanning the local network if the headset's IP changed, then
+   verifies device identity and that Magisk root is still granted over Wi-Fi. The
+   **Headset link** status shows `Wi-Fi · <address>` when connected.
+3. Use tongue capture and **Apply and start selected** exactly as over USB. The hub
+   forwards the wireless target to the tracking and capture scripts automatically.
+
+From the command line, `build-and-run.ps1 -Wireless -TonguePreview
+-EnableTongueOutput …` resolves the headset the same way. `connect-quest-wireless.ps1`
+can be run on its own to (re)establish the link, and `disable-quest-wireless.ps1`
+returns the headset's ADB daemon to USB. Because ADB is reachable on the local
+network while wireless is enabled, use it only on a trusted private network.
+
+> The **USB / Wi-Fi** toggle is transport only — eye convergence comes from an
+> independent-eye Magisk module (Sergio's, our own eye patch, or one you supply); the
+> hub installs and detects it over either transport. No eye-tracking model is included
+> in this project. The original PC gaze runtime is no longer used by the hub. Tongue
+> tracking has no firmware dependency and works on either transport.
 
 Tongue training automatically selects CUDA when PyTorch can access it and falls
 back to CPU instead of failing on systems without NVIDIA graphics. The
@@ -71,9 +156,13 @@ on ordinary PCs, but it can take substantially longer; full-dataset CPU training
 may take hours. Installing the CUDA-enabled PyTorch wheel does not replace the
 Windows NVIDIA display driver—the driver must already be installed and working.
 
-If gaze startup was interrupted, the next launch automatically removes the stale
-headset trace reader before applying the independent-eye branch. You should not
-need to reboot the headset or manually clean tracefs.
+Live tongue tracking runs the selected model through ONNX Runtime + DirectML on
+the GPU, so the tracking process never loads PyTorch or CUDA: about 0.3 GB of RAM
+instead of ~1.1 GB, with identical outputs and less CPU per frame. The first start
+with a new model converts it once (a few seconds) into a `.onnx` twin next to the
+checkpoint. If DirectML or ONNX Runtime is unavailable, tracking falls back to
+PyTorch automatically. Runtimes installed before this change receive ONNX Runtime
+the next time tongue tracking starts.
 
 ## Included profiles
 

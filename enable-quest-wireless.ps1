@@ -7,15 +7,21 @@ param(
 $ErrorActionPreference = "Stop"
 Push-Location $PSScriptRoot
 try {
-    $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
-    if ($null -eq $adbCommand) {
-        $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
-        if (-not (Test-Path -LiteralPath $sdkAdb)) {
-            throw "adb.exe was not found. Install Android platform-tools or add adb to PATH."
-        }
-        $adb = $sdkAdb
-    } else {
-        $adb = $adbCommand.Source
+    # Prefer the bundled Platform-Tools so a friend without adb on PATH or an
+    # Android SDK still works out of the box (QPRO_ADB override first).
+    $adb = if (-not [string]::IsNullOrWhiteSpace($env:QPRO_ADB) -and (Test-Path -LiteralPath $env:QPRO_ADB)) {
+        [System.IO.Path]::GetFullPath($env:QPRO_ADB)
+    }
+    elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot "platform-tools\adb.exe")) {
+        Join-Path $PSScriptRoot "platform-tools\adb.exe"
+    }
+    else {
+        $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
+        if ($null -ne $adbCommand) { $adbCommand.Source }
+        else { Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
+    }
+    if (-not (Test-Path -LiteralPath $adb)) {
+        throw "adb.exe was not found. Re-extract the whole release so platform-tools\adb.exe is present next to this script."
     }
 
     if ([string]::IsNullOrWhiteSpace($UsbSerial)) {
@@ -46,33 +52,41 @@ No wireless setting was changed. Do not install questcam-magisk.zip for this pro
 "@
     }
 
-    $route = (& $adb -s $UsbSerial shell ip -4 route get 1.1.1.1 2>&1) -join " "
-    if ($LASTEXITCODE -ne 0 -or $route -notmatch '\bsrc\s+(?<ip>\d+\.\d+\.\d+\.\d+)') {
-        throw "Could not determine the headset Wi-Fi address from $UsbSerial."
+    # The headset's real Wi-Fi address is the wlan0 interface address. Deriving it
+    # from the default route ("ip route get 1.1.1.1") can return a different
+    # interface's source address, which is then not reachable over Wi-Fi. Use
+    # wlan0, and fall back to the route source only if wlan0 has no address.
+    $wlan = (& $adb -s $UsbSerial shell ip -4 addr show wlan0 2>&1) -join " "
+    $wifiIp = $null
+    if ($wlan -match '\binet\s+(?<ip>\d+\.\d+\.\d+\.\d+)') { $wifiIp = $Matches.ip }
+    if (-not $wifiIp) {
+        $route = (& $adb -s $UsbSerial shell ip -4 route get 1.1.1.1 2>&1) -join " "
+        if ($route -match '\bsrc\s+(?<ip>\d+\.\d+\.\d+\.\d+)') { $wifiIp = $Matches.ip }
     }
-    $ipAddress = $Matches.ip
-    $target = "${ipAddress}:$Port"
 
     Write-Host "Switching the USB-authorized headset ADB daemon to TCP port $Port"
     & $adb -s $UsbSerial tcpip $Port
     if ($LASTEXITCODE -ne 0) { throw "Enabling ADB-over-Wi-Fi failed." }
     Start-Sleep -Seconds 2
-    & $adb connect $target
-    if ($LASTEXITCODE -ne 0) { throw "Connecting to $target failed." }
-    $state = (& $adb -s $target get-state 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0 -or $state.Trim() -ne "device") {
-        throw "The wireless headset did not reach the ADB device state: $target"
+
+    # Delegate the connection to connect-quest-wireless.ps1: it tries the detected
+    # address and, if that is wrong (a different interface, or a moved DHCP lease),
+    # scans the local network for the headset, verifies root, and saves the target.
+    $connectScript = Join-Path $PSScriptRoot "connect-quest-wireless.ps1"
+    if (-not (Test-Path -LiteralPath $connectScript)) {
+        throw "connect-quest-wireless.ps1 is missing next to this script; re-extract the release."
+    }
+    $env:QPRO_ADB = $adb
+    $connectArgs = @{ Port = $Port }
+    if ($wifiIp) { $connectArgs['KnownIp'] = $wifiIp }
+    $connectOutput = & $connectScript @connectArgs
+    $connectOutput | Where-Object { $_ -notmatch '^WIRELESS_ADB_READY ' } | ForEach-Object { Write-Host $_ }
+    $ready = $connectOutput | Where-Object { $_ -match '^WIRELESS_ADB_READY (.+)$' } | Select-Object -Last 1
+    if (-not $ready) {
+        throw "ADB over Wi-Fi was enabled, but the headset could not be reached on the network. Make sure the PC and headset are on the same Wi-Fi/router, then unplug USB and press Enable / Connect Wi-Fi again."
     }
 
-    New-Item -ItemType Directory -Force .\config | Out-Null
-    [ordered]@{
-        adbTarget = $target
-        configuredUtc = [DateTime]::UtcNow.ToString("o")
-        transport = "adb-tcp"
-    } | ConvertTo-Json | Set-Content -LiteralPath .\config\wireless-headset.json -Encoding utf8
-
-    Write-Host "WIRELESS_ADB_READY $target"
-    Write-Host "Tongue preview: .\preview-latest-tongue.ps1 -Wireless -Version 7"
+    Write-Output $ready
     Write-Warning "ADB is reachable on the local network until headset reboot or disable-quest-wireless.ps1. Use only a trusted private network."
 } finally {
     Pop-Location
