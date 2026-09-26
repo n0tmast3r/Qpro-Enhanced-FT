@@ -130,6 +130,18 @@ if (Test-Path -LiteralPath $venvPython) {
     $existingRuntimeReady = Test-PythonCommand $venvPython "import cv2,numpy,torch; assert hasattr(cv2,'namedWindow')"
     $existingCudaReady = $existingRuntimeReady -and (Test-PythonCommand $venvPython "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)")
     if ($existingRuntimeReady -and (-not $nvidiaDetected -or $existingCudaReady)) {
+        # Runtimes set up before the low-memory tongue backend lack ONNX Runtime.
+        # Add it without touching PyTorch; tongue tracking falls back to PyTorch
+        # if this download fails.
+        if (-not (Test-PythonCommand $venvPython "import onnx,onnxruntime as o,sys; sys.exit(0 if 'DmlExecutionProvider' in o.get_available_providers() else 1)")) {
+            Write-Host "Adding ONNX Runtime (DirectML) for low-memory live tongue tracking."
+            $ErrorActionPreference = "Continue"
+            # The CPU-only package shares the onnxruntime module name; replace it.
+            & $venvPython -m pip uninstall --yes --disable-pip-version-check onnxruntime *> $null
+            & $venvPython -m pip install --disable-pip-version-check -r $requirements
+            $ErrorActionPreference = "Stop"
+            if ($LASTEXITCODE -ne 0) { Write-Warning "ONNX Runtime could not be installed; live tongue tracking will use PyTorch (more memory)." }
+        }
         & $venvPython -c "import cv2,numpy,torch; print('Existing shared runtime ready:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
         Write-ReadyMarker $venvPython
         Write-Host "No runtime reinstall was needed."

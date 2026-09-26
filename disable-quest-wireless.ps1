@@ -12,13 +12,18 @@ try {
         }
         $AdbTarget = (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).adbTarget
     }
-    $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
-    $adb = if ($null -ne $adbCommand) {
-        $adbCommand.Source
-    } else {
-        Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
+    $adb = if (-not [string]::IsNullOrWhiteSpace($env:QPRO_ADB) -and (Test-Path -LiteralPath $env:QPRO_ADB)) {
+        [System.IO.Path]::GetFullPath($env:QPRO_ADB)
     }
-    if (-not (Test-Path -LiteralPath $adb)) { throw "adb.exe was not found." }
+    elseif (Test-Path -LiteralPath (Join-Path $PSScriptRoot "platform-tools\adb.exe")) {
+        Join-Path $PSScriptRoot "platform-tools\adb.exe"
+    }
+    else {
+        $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
+        if ($null -ne $adbCommand) { $adbCommand.Source }
+        else { Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe" }
+    }
+    if (-not (Test-Path -LiteralPath $adb)) { throw "adb.exe was not found. Re-extract the whole release so platform-tools\adb.exe is present." }
 
     & $adb -s $AdbTarget usb
     $usbExit = $LASTEXITCODE

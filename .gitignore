@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+.venv/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# ONNX twins of tongue checkpoints (generated on first use; personal models are private)
+models/*.onnx
+models/*.onnx.tmp
+
+# Machine-local wireless pairing (created at runtime by enable/connect scripts)
+config/wireless-headset.json
+
+# Local runtime logs the scripts write next to themselves
+questpro-live-*.txt
+questpro-label-bridge*.txt
+questpro-relay-client-*.txt
+.qpro-hub-stop
+qpro-hub-crash.txt
+
+# Eye modules the user added in the hub (setup step 3); machine-local
+config/eye-modules.json

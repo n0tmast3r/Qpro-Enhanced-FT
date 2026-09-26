@@ -49,10 +49,13 @@ function Copy-ReleaseFile([string]$RelativePath) {
 $runtimeFiles = @(
     "build-and-run.ps1",
     "preview-latest-tongue.ps1",
-    "native-eye-local-branch-test.ps1",
     "install-vrcft-eye-bridge.ps1",
+    "enable-quest-wireless.ps1",
+    "disable-quest-wireless.ps1",
+    "connect-quest-wireless.ps1",
+    "Enable-Wireless.bat",
+    "Disable-Wireless.bat",
     "setup-runtime.ps1",
-    "prepare-eye-model.ps1",
     "train-latest-tongue-stills.ps1",
     "train-latest-tongue-refinement.ps1",
     "requirements-runtime.txt",
@@ -63,13 +66,13 @@ $runtimeFiles = @(
     "tongue_still_capture.py",
     "label_capture.py",
     "tongue_model_preview.py",
+    "export_tongue_onnx.py",
     "train_tongue_model.py",
     "prepare_tongue_stills.py",
     "prepare_tongue_training.py",
     "prepare_training.py",
     "calibration_inspect.py",
     "dataset_inspect.py",
-    "independent_visual_axis_runtime.py",
     "eye_signal_filter.py",
     "native_eye_probe.py",
     "native_eye_stage_probe.py",
@@ -84,7 +87,6 @@ $runtimeFiles = @(
     "calibration\qpro-independent-visual-axis-v2.json",
     "models\qpro-stereo-tongue-v8-gate.pt",
     "models\qpro-stereo-tongue-v8-direction.pt",
-    "research\patch_seacliff_independent_axes.py",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "release-manifest.json"
@@ -92,6 +94,10 @@ $runtimeFiles = @(
 foreach ($file in $runtimeFiles) { Copy-ReleaseFile $file }
 foreach ($file in @("succeed.wav", "trainingComplete.wav", "warning.wav")) {
     Copy-ReleaseFile ("SFX\" + $file)
+}
+# SergioMarquina's eye module, shipped unmodified with his permission (see THIRD_PARTY_NOTICES.md).
+foreach ($file in @("module.prop", "customize.sh", "patch_bolt.sh", "service.sh", "uninstall.sh", "README.md")) {
+    Copy-ReleaseFile ("sergio-eye-module\" + $file)
 }
 foreach ($file in @("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt", "source.properties")) {
     Copy-ReleaseFile ("platform-tools\" + $file)
@@ -112,7 +118,7 @@ $forbidden = @(
         $_.Name -eq "bolt-independent-axes.ptl" -or
         $_.Name -eq "GITHUB_PUBLISHING.md" -or
         $_.Name -like "*.csproj" -or
-        $_.Name -in @("Program.cs", "TrackingModule.cs", "streamer.c", "relay.c", "injector.c", "build-release.ps1", "build-github-source.ps1") -or
+        $_.Name -in @("Program.cs", "EyeModelPatcher.cs", "TrackingModule.cs", "streamer.c", "relay.c", "injector.c", "build-release.ps1", "build-github-source.ps1") -or
         $_.FullName -match '\\(test_|__pycache__|training\\.+\.(npy|npz))'
     }
 )

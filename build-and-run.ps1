@@ -10,6 +10,7 @@ param(
     [ValidateRange(1024, 65535)]
     [int]$StreamPort = 27273,
     [string]$AdbTarget = "",
+    [switch]$Wireless,
     [switch]$Record,
     [ValidateRange(0, 3600)]
     [int]$RecordSeconds = 0,
@@ -83,6 +84,24 @@ function Resolve-WorkspacePath([string]$Path) {
         return [System.IO.Path]::GetFullPath($Path)
     }
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $Path))
+}
+
+# -Wireless resolves the headset over the network without a cable: reuse or
+# rediscover the saved wireless ADB target (connect-quest-wireless.ps1 handles a
+# moved DHCP address and re-verifies root). An explicit -AdbTarget wins over it.
+if ($Wireless -and [string]::IsNullOrWhiteSpace($AdbTarget)) {
+    $connectScript = Join-Path $PSScriptRoot "connect-quest-wireless.ps1"
+    if (-not (Test-Path -LiteralPath $connectScript)) {
+        throw "connect-quest-wireless.ps1 is missing. Reinstall the release package, or pass -AdbTarget host:port."
+    }
+    $connectResult = & $connectScript
+    $connectResult | Where-Object { $_ -notmatch '^WIRELESS_ADB_READY ' } | ForEach-Object { Write-Host $_ }
+    $ready = $connectResult | Where-Object { $_ -match '^WIRELESS_ADB_READY (.+)$' } | Select-Object -Last 1
+    if (-not $ready) {
+        throw "Could not establish a wireless ADB connection. Reconnect USB once and run enable-quest-wireless.ps1, or pass -AdbTarget host:port."
+    }
+    $AdbTarget = ([regex]::Match($ready, '^WIRELESS_ADB_READY (.+)$')).Groups[1].Value.Trim()
+    Write-Host "Wireless headset resolved: $AdbTarget"
 }
 
 if (-not [string]::IsNullOrWhiteSpace($AdbTarget)) {
@@ -240,6 +259,22 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Installing the PC preview dependencies failed." }
         & $python -c "import cv2, numpy; assert hasattr(cv2, 'namedWindow') and hasattr(cv2, 'destroyAllWindows'), 'OpenCV GUI support is missing'"
         if ($LASTEXITCODE -ne 0) { throw "OpenCV installed, but Windows GUI support is still unavailable." }
+    }
+    if ($TonguePreview) {
+        # Live tongue inference prefers ONNX Runtime + DirectML, so the receiver
+        # never loads PyTorch/CUDA (~1.1 GB -> ~0.3 GB RAM). Runtimes set up
+        # before this existed get it here once; without it tongue tracking still
+        # runs on PyTorch.
+        & $python -c "import onnx, onnxruntime as o, sys; sys.exit(0 if 'DmlExecutionProvider' in o.get_available_providers() else 1)" 2>$null
+        if ($LASTEXITCODE -ne 0 -and -not $SkipPythonSetup) {
+            Write-Host "Adding ONNX Runtime (DirectML) for low-memory tongue tracking (one-time download)..."
+            # The CPU-only package shares the onnxruntime module name; replace it.
+            & $python -m pip uninstall --yes --disable-pip-version-check onnxruntime *> $null
+            & $python -m pip install --disable-pip-version-check onnxruntime-directml onnx
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "ONNX Runtime could not be installed; tongue tracking will use PyTorch (more memory)."
+            }
+        }
     }
     if ($openSourceModelsRequired) {
         & $python -c "import onnxruntime as ort; assert hasattr(ort, 'InferenceSession'), 'ONNX Runtime is incomplete'" 2>$null

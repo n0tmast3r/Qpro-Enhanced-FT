@@ -30,10 +30,11 @@ $sourceFiles = @(
     "enable-quest-wireless.ps1",
     "disable-quest-wireless.ps1",
     "preview-latest-tongue.ps1",
-    "native-eye-local-branch-test.ps1",
     "install-vrcft-eye-bridge.ps1",
+    "connect-quest-wireless.ps1",
+    "Enable-Wireless.bat",
+    "Disable-Wireless.bat",
     "setup-runtime.ps1",
-    "prepare-eye-model.ps1",
     "train-latest-tongue-stills.ps1",
     "train-latest-tongue-refinement.ps1",
     "requirements-runtime.txt",
@@ -44,6 +45,7 @@ $sourceFiles = @(
     "tongue_still_capture.py",
     "label_capture.py",
     "tongue_model_preview.py",
+    "export_tongue_onnx.py",
     "train_tongue_model.py",
     "train_model.py",
     "prepare_tongue_stills.py",
@@ -51,7 +53,6 @@ $sourceFiles = @(
     "prepare_training.py",
     "calibration_inspect.py",
     "dataset_inspect.py",
-    "independent_visual_axis_runtime.py",
     "eye_signal_filter.py",
     "native_eye_probe.py",
     "native_eye_stage_probe.py",
@@ -69,11 +70,11 @@ $sourceFiles = @(
     "streamer.c",
     "relay.c",
     "injector.c",
-    "research\patch_seacliff_independent_axes.py",
     "research\inspect_seacliff_archives.py",
     "calibration\qpro-independent-visual-axis-v2.json",
     "qpro-hub\QproFaceTracking.Hub.csproj",
     "qpro-hub\Program.cs",
+    "qpro-hub\EyeModelPatcher.cs",
     "vd-label-bridge\Qpro.VirtualDesktopLabelBridge.csproj",
     "vd-label-bridge\Program.cs",
     "vrcft-gaze-bridge\Qpro.GazeBridge.csproj",
@@ -92,6 +93,10 @@ foreach ($test in Get-ChildItem -LiteralPath $root -File -Filter "test_*.py") {
 foreach ($sound in @("succeed.wav", "trainingComplete.wav", "warning.wav")) {
     Copy-SourceFile ("SFX\" + $sound)
 }
+foreach ($file in @("module.prop", "customize.sh", "patch_bolt.sh", "service.sh", "uninstall.sh", "README.md")) {
+    Copy-SourceFile ("sergio-eye-module\" + $file)
+}
+Copy-SourceFile ".gitattributes"
 Copy-SourceFile "RELEASE_README.md" "README.md"
 Copy-SourceFile "GITHUB_SOURCE_GITIGNORE" ".gitignore"
 
