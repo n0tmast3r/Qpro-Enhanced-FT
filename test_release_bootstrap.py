@@ -73,6 +73,27 @@ class ReleaseBootstrapTests(unittest.TestCase):
         self.assertNotIn("SizeType.Absolute", card)
         self.assertIn("var setupActions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true", hub)
 
+    def test_release_builder_is_self_sufficient_and_keeps_the_v8_model(self) -> None:
+        builder = (ROOT / "build-release.ps1").read_text(encoding="utf-8")
+        for asset in ("models\\qpro-stereo-tongue-v8-gate.pt", "models\\qpro-stereo-tongue-v8-direction.pt",
+                      "platform-tools\\adb.exe", "python-runtime\\python-3.12.10-amd64.exe",
+                      "questpro-camera-injector"):
+            self.assertIn(f'"{asset}"', builder)
+        self.assertIn("release-assets", builder)
+        self.assertIn("SHA256SUMS.txt", builder)
+        self.assertIn("--self-test", builder)
+        self.assertIn("release-manifest.json", builder)
+        self.assertIn("release-assets/", (ROOT / ".gitignore").read_text(encoding="utf-8"))
+
+    def test_hub_title_shows_the_manifest_version(self) -> None:
+        import json
+        manifest = json.loads((ROOT / "release-manifest.json").read_text(encoding="utf-8"))
+        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+")
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        self.assertNotIn("Proof of Concept", hub)
+        self.assertIn('"QproFaceTracking " + AppVersionLabel()', hub)
+        self.assertIn("Qpro.SteamLinkBridge.dll", hub[:hub.index("class HubForm")])
+
 
 if __name__ == "__main__":
     unittest.main()

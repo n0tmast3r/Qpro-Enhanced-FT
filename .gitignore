@@ -23,3 +23,8 @@ qpro-hub-crash.txt
 
 # Eye modules the user added in the hub (setup step 3); machine-local
 config/eye-modules.json
+
+# Release builds (build-release.ps1) and the downloaded release-only assets
+dist/
+artifacts/
+release-assets/

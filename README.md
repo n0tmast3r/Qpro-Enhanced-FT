@@ -8,13 +8,13 @@
 
 ## Download
 
-For normal use, download the complete `QproFaceTracking-<version>-poc.zip` package
+For normal use, download the complete `QproFaceTracking-<version>.zip` package
 from this repository's **Releases** page and extract the whole folder. GitHub's
 automatically generated “Source code” archives do not contain the large executable,
 pretrained model, private Python installer, or bundled Android tools required to
 run the application.
 
-QproFaceTracking is an experimental, USB- or Wi-Fi-connected Quest Pro proof of concept for
+QproFaceTracking is an experimental, USB- or Wi-Fi-connected Quest Pro add-on for
 VRCFaceTracking. It keeps Virtual Desktop's normal face, brow, jaw, and blink data,
 then optionally replaces only:
 
@@ -203,30 +203,57 @@ The bundled developer v8 demo is protected from accidental deletion.
   stable but produced about 36 paired stereo samples per second; it does not imply
   72 completed tongue inferences per second.
 
-## Source and development
+## Building from source and releasing
 
-The main repository contains the editable WinForms/.NET hub, Python tracking and
-training code, and C headset relay/injector sources. Large generated executables,
-the developer-trained model, Android tools, and the private Python installer are
-kept out of Git history and distributed in the versioned Release package instead.
-That keeps clones reviewable while ordinary users still receive a complete build.
+The repository holds the source code: the WinForms/.NET hub, the VRCFaceTracking
+bridges, the Python tracking and training code, and the C headset relay/injector.
+A few large files are kept **out of Git** on purpose. These are the bundled
+developer tongue model (v8), Android platform-tools, the official Python installer
+and the prebuilt headset binaries. `build-release.ps1` downloads them once from the
+previous GitHub release into `release-assets\` (ignored by Git), so a fresh clone
+can still build a complete release.
 
-A source-only clone can build and edit the managed/Python/C components, but the
-full `build-release.ps1` packaging step also requires maintainer-staged assets that
-are intentionally not kept in Git: the developer model checkpoints, official
-Python installer, Android Platform Tools, and prebuilt rooted-headset binaries.
-GitHub does not automatically produce a runnable package from the repository;
-official runnable builds are attached explicitly on the Releases page.
+### What you need
 
-Developers rebuilding native components can run:
+- Windows 10/11 x64 with the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- VRCFaceTracking installed from Steam. The bridges compile against its DLLs. It is
+  found automatically; otherwise pass `-VrcftInstallDir "path\to\VRCFaceTracking"`.
+- Python 3.12 with NumPy/OpenCV/PyTorch to run the tests. The runtime the hub
+  installs works: `%LOCALAPPDATA%\QproFaceTracking\runtime\.venv\Scripts\python.exe`.
+
+### Everyday development
 
 ```powershell
-.\build-and-run.ps1 -RebuildNative
+# run the tests
+python -m unittest discover -p "test_*.py"
+
+# check that the hub compiles, then run it against this checkout
+dotnet build qpro-hub\QproFaceTracking.Hub.csproj -c Release
+.\qpro-hub\bin\Release\net10.0-windows\QproFaceTracking.Hub.exe --root .
 ```
 
-Developers rebuilding managed helpers can use `-RebuildManaged` or build the
-individual `.csproj` files. See `CONTRIBUTING.md` and `THIRD_PARTY_NOTICES.md` before
-redistributing changes.
+When run from source, the hub uses the scripts in the folder given by `--root`. For
+anything that talks to the headset, testing a full release build (below) is easier
+because it contains adb, the model and the headset binaries.
+
+Developers rebuilding native components can run `.\build-and-run.ps1 -RebuildNative`.
+
+### Making a release
+
+1. Set the new version in `release-manifest.json`, for example `"version": "0.2.1"`.
+   The hub title and the zip name use it.
+2. Run `.\build-release.ps1`. It compiles everything, bundles the v8 tongue model and
+   the other release-only files, runs the packaged hub's self-test and writes
+   `dist\QproFaceTracking-<version>.zip`.
+3. Try the unzipped `dist\QproFaceTracking-<version>\QproFaceTracking.exe`.
+4. On GitHub, open **Releases > Draft a new release**, create the tag `v<version>`,
+   write what changed and attach the zip.
+
+To ship a newer model, adb or headset binary, put the file at the same path in your
+checkout (for example `models\qpro-stereo-tongue-v8-gate.pt`). Files in the checkout
+take priority over the downloaded copies. Don't commit them.
+
+See `CONTRIBUTING.md` and `THIRD_PARTY_NOTICES.md` before redistributing changes.
 
 ## Safety and privacy
 

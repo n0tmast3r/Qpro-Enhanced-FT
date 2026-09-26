@@ -112,6 +112,7 @@ internal static class Program
             "libquestpro-camera-streamer-v8.so", "questpro-camera-relay-v8", "questpro-camera-injector",
             "vd-label-bridge\\bin\\Release\\net10.0\\Qpro.VirtualDesktopLabelBridge.exe",
             "vrcft-gaze-bridge\\bin\\Release\\net10.0\\Qpro.GazeBridge.dll",
+            "vrcft-steamlink-bridge\\bin\\Release\\net10.0\\Qpro.SteamLinkBridge.dll",
             "sergio-eye-module\\module.prop", "sergio-eye-module\\customize.sh", "sergio-eye-module\\patch_bolt.sh",
             "sergio-eye-module\\service.sh", "sergio-eye-module\\uninstall.sh"
         };
@@ -281,7 +282,7 @@ internal sealed class HubForm : Form
         page.RowStyles.Add(new RowStyle(SizeType.Absolute, 700));
         page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var title = new Label { Text = "QproFaceTracking · Proof of Concept", AutoSize = true, Font = new Font(UiFontName, 22F, FontStyle.Bold), ForeColor = Color.White };
+        var title = new Label { Text = "QproFaceTracking " + AppVersionLabel(), AutoSize = true, Font = new Font(UiFontName, 22F, FontStyle.Bold), ForeColor = Color.White };
         var subtitle = new Label { Text = "USB or Wi-Fi control hub · stock Virtual Desktop face, brow, jaw, and blink tracking stays intact", AutoSize = true, ForeColor = Muted, Margin = new Padding(2, 4, 0, 18) };
         var heading = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Dock = DockStyle.Top };
         heading.Controls.Add(title); heading.Controls.Add(subtitle);
@@ -2301,6 +2302,21 @@ internal sealed class HubForm : Form
                 MessageBoxIcon.Warning);
         }
         await RefreshStatusAsync();
+    }
+
+    // "v0.2.0" from release-manifest.json (the release's single version source), else the
+    // version stamped into the executable; plain source builds show "(development build)".
+    private string AppVersionLabel()
+    {
+        try
+        {
+            var manifest = Path.Combine(_root, "release-manifest.json");
+            var version = File.Exists(manifest) ? JsonNode.Parse(File.ReadAllText(manifest))?["version"]?.GetValue<string>() : null;
+            if (!string.IsNullOrWhiteSpace(version)) return "v" + version.Trim();
+        }
+        catch { }
+        var stamped = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(HubForm).Assembly)?.InformationalVersion?.Split('+')[0];
+        return string.IsNullOrWhiteSpace(stamped) || stamped.StartsWith("1.0.0", StringComparison.Ordinal) ? "(development build)" : "v" + stamped;
     }
 
     // Either the Virtual Desktop bridge or the Steam Link bridge counts; only one is installed at a time.

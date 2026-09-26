@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.10"
+    [string]$Version = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "release-manifest.json") | ConvertFrom-Json).version
 )
 
 $ErrorActionPreference = "Stop"
