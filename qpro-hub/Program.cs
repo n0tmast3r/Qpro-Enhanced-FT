@@ -164,7 +164,8 @@ internal sealed class HubForm : Form
     private readonly Label _setupBridgeStatus = SetupStatusLabel();
     private readonly Label _setupGazeStatus = SetupStatusLabel();
     private readonly DarkButton _setupRuntimeButton = SetupButton("Install runtime");
-    private readonly DarkButton _setupBridgeButton = SetupButton("Install bridge");
+    private readonly DarkButton _setupBridgeButton = SetupButton("Install VD bridge");
+    private readonly DarkButton _setupSteamLinkBridgeButton = SetupButton("Install Steam Link bridge");
     private readonly DarkButton _setupGazeButton = SetupButton("Prepare gaze");
     private readonly DarkProgressBar _setupProgress = new() { Dock = DockStyle.Fill, Height = 18, Margin = new Padding(4, 5, 4, 2) };
     private readonly Label _setupProgressStatus = new() { Text = "Setup idle.", AutoSize = true, ForeColor = Muted, Margin = new Padding(4, 2, 4, 3) };
@@ -368,10 +369,11 @@ internal sealed class HubForm : Form
         var setupActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
         for (var column = 0; column < 3; column++) setupActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
         _setupRuntimeButton.Click += async (_, _) => await RunSetupStepAsync("PC runtime setup", "setup-runtime.ps1", "PC runtime is ready.", "Next: close VRCFaceTracking and install the combined bridge.");
-        _setupBridgeButton.Click += async (_, _) => await RunSetupStepAsync("Install bridge", "install-vrcft-eye-bridge.ps1", "The combined VRCFaceTracking bridge is installed.", "Restart VRCFaceTracking, then prepare gaze from the headset.");
+        _setupBridgeButton.Click += async (_, _) => await RunSetupStepAsync("Install VD bridge", "install-vrcft-eye-bridge.ps1", "The combined VRCFaceTracking bridge is installed.", "Restart VRCFaceTracking, then prepare gaze from the headset.");
+        _setupSteamLinkBridgeButton.Click += async (_, _) => await RunSetupStepAsync("Install Steam Link bridge", "install-steamlink-bridge.ps1", "The combined Steam Link VRCFaceTracking bridge is installed.", "In Steam Link set OSC Output Port to 9015 (Custom), restart VRCFaceTracking, then prepare gaze from the headset.");
         _setupGazeButton.Click += async (_, _) => await PrepareGazeAsync();
         setupActions.Controls.Add(SetupStepCard("1", "PC runtime", "Includes private Python and CPU/GPU libraries. No system Python is needed.", _setupRuntimeStatus, _setupRuntimeButton), 0, 0);
-        setupActions.Controls.Add(SetupStepCard("2", "VRCFT bridge", "Adds the combined VRCFT module. Stock face and blink tracking stay intact.", _setupBridgeStatus, _setupBridgeButton), 1, 0);
+        setupActions.Controls.Add(SetupStepCard("2", "VRCFT bridge", "Adds the combined VRCFT module for Virtual Desktop or Steam Link.", _setupBridgeStatus, _setupBridgeButton, _setupSteamLinkBridgeButton), 1, 0);
         setupActions.Controls.Add(SetupStepCard("3", "Independent gaze", "Creates the gaze patch from your rooted Quest Pro. No stock model is distributed.", _setupGazeStatus, _setupGazeButton), 2, 0);
         firstRun.Controls.Add(setupActions, 0, 3);
         setupPage.Controls.Add(firstRun);
@@ -540,14 +542,14 @@ internal sealed class HubForm : Form
         if (FindAdb() is null) missing.Add("re-extract the release; bundled platform-tools\\adb.exe is missing");
         else if (!await HasUsbQuestAsync()) missing.Add("connect and authorize the rooted Quest Pro over USB");
         if (!Process.GetProcessesByName("vrserver").Any()) missing.Add("start SteamVR");
-        if (!Process.GetProcessesByName("VRCFaceTracking").Any()) missing.Add("start VRCFaceTracking and confirm Virtual Desktop face tracking is flowing");
+        if (!Process.GetProcessesByName("VRCFaceTracking").Any()) missing.Add("start VRCFaceTracking and confirm Virtual Desktop or Steam Link face tracking is flowing");
         if (!BackendReady()) missing.Add("run First-time setup: Set up PC runtime");
         if (missing.Count > 0)
         {
             MessageBox.Show(
                 this,
                 "Before recording:\n\n• " + string.Join("\n• ", missing) +
-                "\n\nThe current trainer uses Virtual Desktop's native TongueOut confidence as a reference label, so SteamVR and VRCFaceTracking are required during capture.",
+                "\n\nThe current trainer uses the native TongueOut confidence from Virtual Desktop or Steam Link as a reference label, so SteamVR and VRCFaceTracking are required during capture.",
                 "Capture is not ready",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
@@ -685,6 +687,7 @@ internal sealed class HubForm : Form
     {
         _setupRuntimeButton.Enabled = enabled;
         _setupBridgeButton.Enabled = enabled;
+        _setupSteamLinkBridgeButton.Enabled = enabled;
         _setupGazeButton.Enabled = enabled;
     }
 
@@ -1235,7 +1238,9 @@ internal sealed class HubForm : Form
         var ready = new[] { BackendReady(), BridgeInstalled(), EyeModelReady() };
         var next = Array.FindIndex(ready, value => !value);
         StyleSetupStep(_setupRuntimeButton, _setupRuntimeStatus, "Install runtime", ready[0], next == 0);
-        StyleSetupStep(_setupBridgeButton, _setupBridgeStatus, "Install bridge", ready[1], next == 1);
+        StyleSetupStep(_setupBridgeButton, _setupBridgeStatus, "Install VD bridge", VirtualDesktopBridgeInstalled(), next == 1);
+        StyleSetupStep(_setupSteamLinkBridgeButton, _setupBridgeStatus, "Install Steam Link bridge", SteamLinkBridgeInstalled(), next == 1);
+        StyleSetupStatus(_setupBridgeStatus, ready[1], next == 1);
         StyleSetupStep(_setupGazeButton, _setupGazeStatus, "Prepare gaze", ready[2], next == 2);
     }
 
@@ -1244,9 +1249,14 @@ internal sealed class HubForm : Form
         button.Text = complete ? "✓  " + label : label;
         button.OutlineColor = complete ? Good : attention && _setupPulseOn ? Accent : Border;
         button.OutlineWidth = complete || attention && _setupPulseOn ? 2 : 1;
+        StyleSetupStatus(status, complete, attention);
+        button.Invalidate();
+    }
+
+    private static void StyleSetupStatus(Label status, bool complete, bool attention)
+    {
         status.Text = complete ? "● Complete" : attention ? "● Next step" : "○ Waiting";
         status.ForeColor = complete ? Good : attention ? Warning : Muted;
-        button.Invalidate();
     }
 
     private void PlaySfx(string fileName)
@@ -1329,7 +1339,10 @@ internal sealed class HubForm : Form
         return candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
     }
 
-    private bool BridgeInstalled() => File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking", "CustomLibs", "000-Qpro.IndependentGaze.dll"));
+    // Either the Virtual Desktop bridge or the Steam Link bridge counts; only one is installed at a time.
+    private bool BridgeInstalled() => VirtualDesktopBridgeInstalled() || SteamLinkBridgeInstalled();
+    private static bool VirtualDesktopBridgeInstalled() => File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking", "CustomLibs", "000-Qpro.IndependentGaze.dll"));
+    private static bool SteamLinkBridgeInstalled() => File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking", "CustomLibs", "000-Qpro.SteamLinkBridge.dll"));
     private bool BackendReady() => FindPythonRuntime() is not null;
     private bool EyeModelReady() => File.Exists(Path.Combine(_root, "research", "seacliff_eye_model", "bolt-independent-axes.ptl"));
     private string VisibilityModeValue() => _visibilityMode.SelectedIndex switch { 1 => "camera", 2 => "native", 3 => "agreement", _ => "weighted" };
@@ -1429,14 +1442,19 @@ internal sealed class HubForm : Form
     private static DarkButton ActionButton(string text, EventHandler action) { var button = SecondaryButton(text); button.Enabled = true; button.Margin = new Padding(6, 4, 6, 4); button.Click += action; return button; }
     private static DarkButton SetupButton(string text) { var button = SecondaryButton(text); button.Enabled = true; button.AutoSize = false; button.Height = 42; button.Dock = DockStyle.Bottom; button.Margin = new Padding(3, 8, 3, 3); return button; }
 
-    private static Control SetupStepCard(string number, string title, string description, Label status, DarkButton button)
+    private static Control SetupStepCard(string number, string title, string description, Label status, DarkButton button, DarkButton? secondButton = null)
     {
-        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = Raised, Padding = new Padding(13), Margin = new Padding(5) };
+        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = secondButton is null ? 5 : 6, ColumnCount = 1, BackColor = Raised, Padding = new Padding(13), Margin = new Padding(5) };
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         card.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        if (secondButton is not null)
+        {
+            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+            card.Controls.Add(secondButton, 0, 5);
+        }
         card.Controls.Add(new Label { Text = $"STEP {number}", AutoSize = true, ForeColor = Warning, Font = new Font(UiFontName, 8.5F, FontStyle.Bold) }, 0, 0);
         card.Controls.Add(new Label { Text = title, AutoSize = true, ForeColor = Color.White, Font = new Font(UiFontName, 11F, FontStyle.Bold), Margin = new Padding(3, 3, 3, 4) }, 0, 1);
         card.Controls.Add(status, 0, 2);

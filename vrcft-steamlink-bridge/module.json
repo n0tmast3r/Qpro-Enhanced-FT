@@ -1,0 +1,18 @@
+{
+  "InstallationState": 0,
+  "ModuleId": "4ca5bd05-ca90-47bb-a3c1-66d41427ac00",
+  "LastUpdated": "2026-09-25T00:00:00Z",
+  "Version": "0.6.0",
+  "IsLocal": true,
+  "Downloads": 0,
+  "Ratings": 0,
+  "Rating": 0.0,
+  "AuthorName": "QproFaceTracking",
+  "ModuleName": "Quest Pro Independent Gaze Bridge (Steam Link)",
+  "ModuleDescription": "Complete Steam Link face reader with independent Quest Pro gaze and an opt-in fail-safe experimental tongue override.",
+  "UsageInstructions": "Set Steam Link OSC Output Port to 9015 (Custom). Remove other Steam Link modules and the Virtual Desktop bridge from CustomLibs.",
+  "DownloadUrl": "https://github.com/benaclejames/VRCFaceTracking",
+  "ModulePageUrl": "https://github.com/benaclejames/VRCFaceTracking",
+  "DllFileName": "Qpro.SteamLinkBridge.dll",
+  "FileHash": null
+}

@@ -37,6 +37,13 @@ $vrcftBinaryDestination = Join-Path $releaseRoot "vrcft-gaze-bridge\bin\Release\
 New-Item -ItemType Directory -Force -Path $vrcftBinaryDestination | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "vrcft-gaze-bridge\bin\Release\net10.0\Qpro.GazeBridge.dll") -Destination $vrcftBinaryDestination
 
+Write-Host "Building the Steam Link VRCFT bridge..."
+& dotnet build (Join-Path $root "vrcft-steamlink-bridge\Qpro.SteamLinkBridge.csproj") -c Release
+if ($LASTEXITCODE -ne 0) { throw "Building the Steam Link VRCFT bridge failed." }
+$steamLinkBinaryDestination = Join-Path $releaseRoot "vrcft-steamlink-bridge\bin\Release\net10.0"
+New-Item -ItemType Directory -Force -Path $steamLinkBinaryDestination | Out-Null
+Copy-Item -LiteralPath (Join-Path $root "vrcft-steamlink-bridge\bin\Release\net10.0\Qpro.SteamLinkBridge.dll") -Destination $steamLinkBinaryDestination
+
 function Copy-ReleaseFile([string]$RelativePath) {
     $source = Join-Path $root $RelativePath
     if (-not (Test-Path -LiteralPath $source)) { throw "Required release file is missing: $RelativePath" }
@@ -51,6 +58,7 @@ $runtimeFiles = @(
     "preview-latest-tongue.ps1",
     "native-eye-local-branch-test.ps1",
     "install-vrcft-eye-bridge.ps1",
+    "install-steamlink-bridge.ps1",
     "setup-runtime.ps1",
     "prepare-eye-model.ps1",
     "train-latest-tongue-stills.ps1",

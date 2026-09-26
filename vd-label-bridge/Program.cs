@@ -7,7 +7,10 @@ using System.Text.Json;
 
 [assembly: SupportedOSPlatform("windows")]
 
-const string MapName = "VirtualDesktop.BodyState";
+const string VirtualDesktopMapName = "VirtualDesktop.BodyState";
+// Written by the Qpro Steam Link VRCFT bridge in the same layout (face weights
+// and flags byte only; the eye fields stay zero).
+const string SteamLinkMapName = "Qpro.SteamLink.BodyState";
 const int StateBytes = 360;
 const int ExpressionOffset = 4;
 const int ExpressionCount = 70;
@@ -38,17 +41,26 @@ string[] expressionNames =
 
 int port = 27274;
 int sampleRate = 60;
+string source = "virtual-desktop";
 for (int index = 0; index < args.Length; ++index)
 {
     if (args[index] == "--port" && index + 1 < args.Length)
         port = int.Parse(args[++index]);
     else if (args[index] == "--sample-rate" && index + 1 < args.Length)
         sampleRate = int.Parse(args[++index]);
+    else if (args[index] == "--source" && index + 1 < args.Length)
+        source = args[++index];
     else
-        throw new ArgumentException("Usage: Qpro.VirtualDesktopLabelBridge [--port 27274] [--sample-rate 10..120]");
+        throw new ArgumentException("Usage: Qpro.VirtualDesktopLabelBridge [--port 27274] [--sample-rate 10..120] [--source virtual-desktop|steam-link]");
 }
 if (port is < 1024 or > 65535 || sampleRate is < 10 or > 120)
     throw new ArgumentOutOfRangeException("Port or sample rate is outside its supported range");
+if (source is not ("virtual-desktop" or "steam-link"))
+    throw new ArgumentException("--source must be virtual-desktop or steam-link");
+string mapName = source == "steam-link" ? SteamLinkMapName : VirtualDesktopMapName;
+string waitingMessage = source == "steam-link"
+    ? "WAITING_FOR_STEAM_LINK_BODY_STATE"
+    : "WAITING_FOR_VIRTUAL_DESKTOP_BODY_STATE";
 
 using UdpClient udp = new(AddressFamily.InterNetwork);
 udp.Connect(IPAddress.Loopback, port);
@@ -80,16 +92,16 @@ while (!cancellation.IsCancellationRequested)
     {
         try
         {
-            mappedFile = MemoryMappedFile.OpenExisting(MapName, MemoryMappedFileRights.Read);
+            mappedFile = MemoryMappedFile.OpenExisting(mapName, MemoryMappedFileRights.Read);
             view = mappedFile.CreateViewAccessor(0, StateBytes, MemoryMappedFileAccess.Read);
-            Console.WriteLine($"VD_LABEL_SOURCE_READY bytes={StateBytes} rate={sampleRate}");
+            Console.WriteLine($"VD_LABEL_SOURCE_READY source={source} bytes={StateBytes} rate={sampleRate}");
             waitingReported = false;
         }
         catch (FileNotFoundException)
         {
             if (!waitingReported)
             {
-                Console.WriteLine("WAITING_FOR_VIRTUAL_DESKTOP_BODY_STATE");
+                Console.WriteLine(waitingMessage);
                 waitingReported = true;
             }
             cancellation.Token.WaitHandle.WaitOne(1000);

@@ -362,7 +362,14 @@ try {
     $capText = if ($MaxFps -eq 0) { "unlimited" } else { "$MaxFps FPS" }
     Write-Host "Transport mode: $CameraMode; cap: $capText"
     if ($labelsEnabled) {
-        $labelBridgeProcess = Start-Process -FilePath $labelBridgeExe -ArgumentList @("--port", "$LabelsPort") -PassThru -WindowStyle Hidden -RedirectStandardOutput .\questpro-label-bridge.txt -RedirectStandardError .\questpro-label-bridge-error.txt
+        $labelBridgeArguments = @("--port", "$LabelsPort")
+        # The installed Qpro VRCFT bridge decides where the factory reference comes from.
+        $steamLinkBridgePath = Join-Path $env:APPDATA "VRCFaceTracking\CustomLibs\000-Qpro.SteamLinkBridge.dll"
+        if (Test-Path -LiteralPath $steamLinkBridgePath) {
+            $labelBridgeArguments += @("--source", "steam-link")
+            Write-Host "Factory reference: Steam Link (via the Qpro Steam Link VRCFT bridge)"
+        }
+        $labelBridgeProcess = Start-Process -FilePath $labelBridgeExe -ArgumentList $labelBridgeArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput .\questpro-label-bridge.txt -RedirectStandardError .\questpro-label-bridge-error.txt
         Start-Sleep -Milliseconds 300
         if ($labelBridgeProcess.HasExited) {
             throw "The Virtual Desktop label bridge exited during startup. Send questpro-label-bridge-error.txt."
