@@ -35,7 +35,7 @@ headset has been paired.
 - Meta developer mode and an authorized USB debugging connection
 - No separate ADB installation; the release includes the required official Android
   Platform-Tools files
-- SteamVR, Virtual Desktop, and VRCFaceTracking
+- SteamVR, Virtual Desktop or Steam Link, and VRCFaceTracking
 - A current NVIDIA display driver is strongly recommended for fast tongue-model
   training. NVIDIA hardware is optional; CPU training is supported but is much
   slower, especially for the full dataset.
@@ -57,8 +57,16 @@ our own patch from your headset's model.
 3. Select **Set up PC runtime**. No preinstalled Python or PATH modification is
    required. The release carries the official signed Python 3.12.10 installer and
    silently installs a private per-user copy plus OpenCV, NumPy, PyTorch, and
-   ONNX Runtime (DirectML) under
-4. Close VRCFaceTracking, then select **Install/update bridge**. Restart VRCFT.
+   ONNX Runtime (DirectML) under `%LOCALAPPDATA%\QproFaceTracking\runtime`. It
+   creates no launcher, shortcuts, file associations, or PATH entries. If Python 3.12
+   is already installed on the PC, setup reuses it as the base for its own private
+   environment instead of touching your installation. PyTorch is a large download,
+   but later release folders reuse the same runtime. Setup uses PyTorch's official
+   CUDA 12.8 wheel when an NVIDIA driver/GPU is detected and the official CPU wheel
+   otherwise.
+4. Close VRCFaceTracking, then select **Install VD bridge** (Virtual Desktop users) or
+   **Install Steam Link bridge** (Steam Link users, see [Steam Link](#steam-link)).
+   Restart VRCFT.
 5. Pick the **Connection** at the top of the hub — **USB** or **Wi-Fi**.
    Eye convergence comes from an **independent-eye Magisk module** on the headset.
    First-time setup **step 3 → Manage eye module** offers, in this order:
@@ -73,7 +81,8 @@ our own patch from your headset's model.
      that patches your own copy on the headset, verifies it by SHA-256, mounts it at
      boot and turns off the eye-tracking social filter. The gate patch is the default;
      "exact rewire" is an experimental option not yet tested on a headset.
-6. Start Virtual Desktop(or restart it), SteamVR, and VRCFT. Confirm ordinary tracking works.
+6. Start Virtual Desktop or Steam Link (or restart it), SteamVR, and VRCFT. Confirm
+   ordinary tracking works.
 7. Turn on tongue tracking if you want it, choose its settings, then press
    **Apply and start selected**. Eye gaze runs from the eye module on the headset; Apply
    checks it is active unless **Skip eye gaze (tongue only)** is on.
@@ -82,16 +91,16 @@ our own patch from your headset's model.
 ## Wireless (ADB over Wi-Fi)
 
 Pick the connection explicitly with the **USB / Wi-Fi** toggle at the top of the
-hub (default **USB**).expect roughly 60–90 Mbit/s upstream for live tongue cameras, 
-so a 5 GHz / Wi-Fi 6 network
-(ideally a dedicated VR access point) is recommended alongside Virtual Desktop. The
-PC and headset must be on the same network/router.
+hub (default **USB**). Expect roughly 60–90 Mbit/s upstream for live tongue cameras,
+so a 5 GHz / Wi-Fi 6 network (ideally a dedicated VR access point) is recommended
+alongside Virtual Desktop. The PC and headset must be on the same network/router.
 
-1. **Pair once over USB.** With the headset connected by USB, press Wi-Fi at the top, and
-   press Enable/Connect Wifi. Then, when you see your headset's IP address under the
-   "Headset Link" text, then your good to unplug your headset.
-        
-4. Use tongue capture and **Apply and start selected** exactly as over USB. The hub
+1. **Pair once over USB.** With the headset connected by USB, select **Wi-Fi** at the
+   top and press **Enable / Connect Wi-Fi**. When the headset's IP address appears
+   under **Headset link**, you can unplug the cable.
+2. **Later sessions:** select **Wi-Fi** and press **Enable / Connect Wi-Fi**. The hub
+   reconnects to the saved address (or scans your local network) without a cable.
+3. Use tongue capture and **Apply and start selected** exactly as over USB. The hub
    forwards the wireless target to the tracking and capture scripts automatically.
 
 > The **USB / Wi-Fi** toggle is transport only — eye convergence comes from an
@@ -111,6 +120,25 @@ may take hours. Installing the CUDA-enabled PyTorch wheel does not replace the
 Windows NVIDIA display driver—the driver must already be installed and working.
 
 
+
+## Steam Link
+
+**Install Steam Link bridge** installs a bridge that reads Steam Link's OSC face and
+eye data instead of Virtual Desktop's. Tongue tracking works the same way as with
+Virtual Desktop.
+
+- In Steam Link's advanced settings, turn on OSC and eye/face tracking sharing, and
+  set the OSC output port to 9015 (Custom).
+- Only one bridge can be installed at a time. Each install button removes the other
+  bridge. The Steam Link one also moves the LinkFT and SteamLink VRCFT modules into
+  `research\`, because they use the same port.
+- Steam Link sends one gaze direction for both eyes, so **eye convergence (step 3)
+  only shows up through Virtual Desktop**. Face, blink and tongue tracking work the
+  same with either bridge.
+- Set tongue **Visibility** to **Camera only**. The default mode mixes in Virtual
+  Desktop's native TongueOut, which is always zero under Steam Link.
+- Tongue capture works with the Steam Link bridge installed: the bridge shares Steam
+  Link's face weights with the capture tool, so VRCFT must be running during capture.
 
 ## Included profiles
 
@@ -136,8 +164,8 @@ On first launch it also copies complete personal tongue model pairs from an
 adjacent older release into the new release folder. The public package itself still
 contains only the developer v8 demonstration model.
 
-Capture currently requires Virtual Desktop tracking, SteamVR, and VRCFaceTracking
-to be running because the trainer records Quest Pro's native `TongueOut` confidence
+Capture currently requires Virtual Desktop or Steam Link tracking, SteamVR, and
+VRCFaceTracking to be running because the trainer records Quest Pro's native `TongueOut` confidence
 as an auxiliary visibility label. The hub checks these common prerequisites before
 opening the guided camera window and explains what is missing directly.
 
