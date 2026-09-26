@@ -48,6 +48,31 @@ class ReleaseBootstrapTests(unittest.TestCase):
         ):
             self.assertIn(expected, hub)
 
+    def test_existing_python_312_is_reused_instead_of_modified(self) -> None:
+        # Issue #1: the python.org installer modifies an existing per-user 3.12
+        # instead of creating the private copy, so setup must look for one first.
+        source = (ROOT / "setup-runtime.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Find-ExistingPython312", source)
+        self.assertIn("Software\\Python\\PythonCore\\3.12\\InstallPath", source)
+        self.assertIn("WindowsApps", source)
+        self.assertIn("sys.version_info[:2] == (3, 12)", source)
+        detect = source.index("($existingPython = Find-ExistingPython312)")
+        install = source.index("Start-Process -FilePath $bundledPythonInstaller")
+        self.assertLess(detect, install, "existing Python must be checked before running the installer")
+        after_install = source[install:]
+        self.assertIn("Find-ExistingPython312", after_install, "installer 'success' without python.exe must fall back")
+        self.assertIn("no longer starts", source, "a venv whose base Python was removed must be rebuilt")
+
+    def test_setup_cards_size_to_content(self) -> None:
+        # Issue #6: fixed-height setup rows clipped the Install buttons at high DPI.
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        self.assertNotIn("firstRun.RowStyles.Add(new RowStyle(SizeType.Absolute", hub)
+        start = hub.index("private static Control SetupStepCard(")
+        card = hub[start:hub.index("private static Control WorkflowCard(", start)]
+        self.assertIn("AutoSize = true", card)
+        self.assertNotIn("SizeType.Absolute", card)
+        self.assertIn("var setupActions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true", hub)
+
 
 if __name__ == "__main__":
     unittest.main()

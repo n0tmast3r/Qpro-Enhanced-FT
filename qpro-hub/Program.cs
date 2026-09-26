@@ -240,7 +240,9 @@ internal sealed class HubForm : Form
         _fps.Items.AddRange(["12", "15", "18", "20", "24", "30", "36", "48", "60", "72"]);
         _fps.SelectedItem = "24";
         _visibilityMode.Items.AddRange(["Weighted camera + native", "Camera only", "Native only", "Conservative agreement"]);
-        _visibilityMode.SelectedIndex = 0;
+        // Steam Link has no native TongueOut, so the weighted default would never see a
+        // tongue there. Start in Camera only when the Steam Link bridge is installed.
+        _visibilityMode.SelectedIndex = SteamLinkBridgeInstalled() ? 1 : 0;
         ConfigureDropDown(_eyeProfiles);
         ConfigureDropDown(_tongueModels);
         ConfigureDropDown(_fps);
@@ -389,7 +391,10 @@ internal sealed class HubForm : Form
         firstRun.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         firstRun.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         firstRun.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        firstRun.RowStyles.Add(new RowStyle(SizeType.Absolute, 330));
+        // Size the setup cards to their content (issue #6). A fixed 330 px row clipped
+        // the Install buttons at high Windows DPI (e.g. 175%), so they could not be
+        // scrolled into view. Same approach as the personalization cards below.
+        firstRun.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         firstRun.Controls.Add(SectionTitle("Required setup checklist"), 0, 0);
         firstRun.Controls.Add(Info("Complete these once from left to right. The next required step pulses; completed steps stay green. Close VRCFaceTracking for step 2 and restart it afterward."), 0, 1);
         _setupProgressContainer.Dock = DockStyle.Top;
@@ -402,11 +407,15 @@ internal sealed class HubForm : Form
         _setupProgressContainer.Controls.Add(_setupProgressStatus);
         _setupProgressContainer.Controls.Add(_setupProgress);
         firstRun.Controls.Add(_setupProgressContainer, 0, 2);
-        var setupActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
+        var setupActions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 3, RowCount = 1 };
         for (var column = 0; column < 3; column++) setupActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
         _setupRuntimeButton.Click += async (_, _) => await RunSetupStepAsync("PC runtime setup", "setup-runtime.ps1", "PC runtime is ready.", "Next: close VRCFaceTracking and install the combined bridge.");
         _setupBridgeButton.Click += async (_, _) => await RunSetupStepAsync("Install VD bridge", "install-vrcft-eye-bridge.ps1", "The combined Virtual Desktop VRCFaceTracking bridge is installed.", "Restart VRCFaceTracking. For eye convergence, see step 3.");
-        _setupSteamLinkBridgeButton.Click += async (_, _) => await RunSetupStepAsync("Install Steam Link bridge", "install-steamlink-bridge.ps1", "The combined Steam Link VRCFaceTracking bridge is installed.", "In Steam Link set OSC Output Port to 9015 (Custom), then restart VRCFaceTracking.");
+        _setupSteamLinkBridgeButton.Click += async (_, _) =>
+        {
+            await RunSetupStepAsync("Install Steam Link bridge", "install-steamlink-bridge.ps1", "The combined Steam Link VRCFaceTracking bridge is installed.", "In Steam Link set OSC Output Port to 9015 (Custom), then restart VRCFaceTracking. Tongue visibility is set to Camera only.");
+            if (SteamLinkBridgeInstalled()) _visibilityMode.SelectedIndex = 1;
+        };
         _setupGazeButton.Click += async (_, _) => await ShowEyeModuleSetupAsync();
         setupActions.Controls.Add(SetupStepCard("1", "PC runtime", "Includes private Python and CPU/GPU libraries. No system Python is needed.", _setupRuntimeStatus, _setupRuntimeButton), 0, 0);
         setupActions.Controls.Add(SetupStepCard("2", "VRCFT bridge", "Pick the one for how you stream: Virtual Desktop or Steam Link. Stock face and blink tracking stay intact.", _setupBridgeStatus, _setupBridgeButton, _setupSteamLinkBridgeButton), 1, 0);
@@ -2402,15 +2411,16 @@ internal sealed class HubForm : Form
 
     private static Control SetupStepCard(string number, string title, string description, Label status, DarkButton button, DarkButton? secondButton = null)
     {
-        var card = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = secondButton is null ? 5 : 6, ColumnCount = 1, BackColor = Raised, Padding = new Padding(13), Margin = new Padding(5) };
+        var card = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, RowCount = secondButton is null ? 5 : 6, ColumnCount = 1, BackColor = Raised, Padding = new Padding(13), Margin = new Padding(5) };
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         card.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        card.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         if (secondButton is not null)
         {
-            card.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+            card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             card.Controls.Add(secondButton, 0, 5);
         }
         card.Controls.Add(new Label { Text = $"STEP {number}", AutoSize = true, ForeColor = Warning, Font = new Font(UiFontName, 8.5F, FontStyle.Bold) }, 0, 0);

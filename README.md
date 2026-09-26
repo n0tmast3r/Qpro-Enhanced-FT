@@ -81,6 +81,14 @@ our own patch from your headset's model.
      that patches your own copy on the headset, verifies it by SHA-256, mounts it at
      boot and turns off the eye-tracking social filter. The gate patch is the default;
      "exact rewire" is an experimental option not yet tested on a headset.
+   - **Advanced:** **Install module (.zip)** installs a module zip you downloaded
+     through Magisk's own installer after showing its `module.prop` details, and
+     **Choose installed** marks a module you already installed in the Magisk app.
+     Only install modules you trust, and run only one eye-model module at a time.
+
+   After installing, reboot the headset, re-apply root if your root method needs it,
+   and redo the headset's eye-tracking calibration. The hub never reboots the headset
+   for you.
 6. Start Virtual Desktop or Steam Link (or restart it), SteamVR, and VRCFT. Confirm
    ordinary tracking works.
 7. Turn on tongue tracking if you want it, choose its settings, then press
@@ -102,6 +110,9 @@ alongside Virtual Desktop. The PC and headset must be on the same network/router
    reconnects to the saved address (or scans your local network) without a cable.
 3. Use tongue capture and **Apply and start selected** exactly as over USB. The hub
    forwards the wireless target to the tracking and capture scripts automatically.
+
+ADB is reachable on your local network while wireless is enabled, so only use it on
+a trusted private network. `Disable-Wireless.bat` returns the headset to USB-only ADB.
 
 > The **USB / Wi-Fi** toggle is transport only — eye convergence comes from an
 > independent-eye Magisk module (Sergio's, our own eye patch, or one you supply); the
@@ -135,8 +146,9 @@ Virtual Desktop.
 - Steam Link sends one gaze direction for both eyes, so **eye convergence (step 3)
   only shows up through Virtual Desktop**. Face, blink and tongue tracking work the
   same with either bridge.
-- Set tongue **Visibility** to **Camera only**. The default mode mixes in Virtual
-  Desktop's native TongueOut, which is always zero under Steam Link.
+- The hub switches tongue **Visibility** to **Camera only** while the Steam Link bridge
+  is installed, because the weighted mode mixes in Virtual Desktop's native
+  TongueOut, which is always zero under Steam Link.
 - Tongue capture works with the Steam Link bridge installed: the bridge shares Steam
   Link's face weights with the capture tool, so VRCFT must be running during capture.
 

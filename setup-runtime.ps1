@@ -42,6 +42,45 @@ function Write-ReadyMarker([string]$Python) {
     Set-Content -LiteralPath $readyMarker -Value $payload -Encoding UTF8
 }
 
+function Test-UsablePython312([string]$Python) {
+    if ([string]::IsNullOrWhiteSpace($Python) -or -not (Test-Path -LiteralPath $Python)) { return $false }
+    # Microsoft Store Python redirects writes under %LOCALAPPDATA%, which breaks the
+    # private environment. Skip it and let the bundled installer handle that PC.
+    if ($Python -like "*\WindowsApps\*") { return $false }
+    return Test-PythonCommand $Python "import sys,venv,ensurepip; sys.exit(0 if sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)"
+}
+
+function Find-ExistingPython312 {
+    # A per-user or all-users Python 3.12 that is already installed. The bundled
+    # python.org installer cannot install a second private copy next to it: it
+    # switches to Modify/Upgrade mode for the existing one instead (issue #1), so
+    # setup reuses the existing interpreter only as the *base* of its private
+    # virtual environment. The user's installation, PATH and packages are untouched.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($hive in @("HKCU:", "HKLM:")) {
+        $item = Get-ItemProperty -LiteralPath "$hive\Software\Python\PythonCore\3.12\InstallPath" -ErrorAction SilentlyContinue
+        if ($null -eq $item) { continue }
+        if ($item.PSObject.Properties["ExecutablePath"] -and -not [string]::IsNullOrWhiteSpace($item.ExecutablePath)) {
+            $candidates.Add([string]$item.ExecutablePath)
+        }
+        if ($item.PSObject.Properties["(default)"] -and -not [string]::IsNullOrWhiteSpace($item."(default)")) {
+            $candidates.Add((Join-Path ([string]$item."(default)") "python.exe"))
+        }
+    }
+    $candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"))
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidates.Add((Join-Path $env:ProgramFiles "Python312\python.exe"))
+    }
+    $script:unusablePython312 = $null
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (Test-UsablePython312 $candidate) { return $candidate }
+        if ($null -eq $script:unusablePython312 -and -not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            $script:unusablePython312 = $candidate
+        }
+    }
+    return $null
+}
+
 $nvidiaDetected = $false
 $nvidiaName = ""
 $nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
@@ -62,12 +101,33 @@ if (-not [string]::IsNullOrWhiteSpace($env:QPRO_PYTHON) -and (Test-Path -Literal
     }
 }
 
+# A private environment whose base Python was removed or moved no longer starts.
+# Rebuild it instead of failing later inside pip.
+if ((Test-Path -LiteralPath $venvPython) -and -not (Test-PythonCommand $venvPython "import sys")) {
+    Write-Warning "The private Python environment no longer starts (its base Python was probably removed or moved). Rebuilding it."
+    Remove-Item -LiteralPath $venvRoot -Recurse -Force
+    if (Test-Path -LiteralPath $readyMarker) { Remove-Item -LiteralPath $readyMarker -Force }
+}
+
 if (-not (Test-Path -LiteralPath $venvPython)) {
     New-Item -ItemType Directory -Force -Path $sharedRoot | Out-Null
     $basePython = $null
+    $existingPython = $null
     if (Test-Path -LiteralPath $privatePython) {
         $basePython = $privatePython
         Write-Host "Reusing the private bundled Python installation."
+    }
+    elseif ($null -ne ($existingPython = Find-ExistingPython312)) {
+        $basePython = $existingPython
+        Write-Host "Python 3.12 is already installed at $existingPython."
+        Write-Host "Using it only as the base for QproFaceTracking's private environment; your Python installation, PATH and packages are not changed."
+    }
+    elseif ($null -ne $script:unusablePython312 -and $script:unusablePython312 -notlike "*\WindowsApps\*") {
+        # Running the bundled installer now would modify or upgrade that existing
+        # installation instead of creating a private copy (issue #1). Stop with a fix.
+        throw ("Python 3.12 is already installed at $($script:unusablePython312), but it cannot create a private environment (pip/venv is missing). " +
+            "Open Windows Settings > Apps, choose Python 3.12 > Modify and make sure pip is included (or uninstall it), then run PC runtime setup again. " +
+            "Your Python installation was not changed.")
     }
     elseif (Test-Path -LiteralPath $bundledPythonInstaller) {
         $actualHash = (Get-FileHash -LiteralPath $bundledPythonInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -94,10 +154,24 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
             "`"$installLog`""
         )
         $installer = Start-Process -FilePath $bundledPythonInstaller -ArgumentList $installerArguments -WindowStyle Hidden -Wait -PassThru
-        if ($installer.ExitCode -notin @(0, 3010) -or -not (Test-Path -LiteralPath $privatePython)) {
-            throw "The bundled Python installation failed with code $($installer.ExitCode). See $installLog"
+        if ($installer.ExitCode -in @(0, 3010) -and (Test-Path -LiteralPath $privatePython)) {
+            $basePython = $privatePython
         }
-        $basePython = $privatePython
+        else {
+            # The installer reports success but modifies an existing Python 3.12 instead
+            # of creating the private copy when one is already registered (issue #1).
+            $existingPython = Find-ExistingPython312
+            if ($null -ne $existingPython) {
+                Write-Host "The bundled installer found an existing Python 3.12 at $existingPython instead of creating a private copy."
+                Write-Host "Using it only as the base for QproFaceTracking's private environment."
+                $basePython = $existingPython
+            }
+            else {
+                throw ("The bundled Python installation failed with code $($installer.ExitCode). See $installLog`n" +
+                    "If Python 3.12 is already installed on this PC, open Windows Settings > Apps, choose Python 3.12 > Modify, " +
+                    "make sure pip is included (or uninstall it), then run PC runtime setup again.")
+            }
+        }
     }
     else {
         # Developer/source checkouts may intentionally omit the redistributable.
