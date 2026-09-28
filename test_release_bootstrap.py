@@ -94,6 +94,21 @@ class ReleaseBootstrapTests(unittest.TestCase):
         self.assertIn('"QproFaceTracking " + AppVersionLabel()', hub)
         self.assertIn("Qpro.SteamLinkBridge.dll", hub[:hub.index("class HubForm")])
 
+    def test_layout_scales_with_windows_display_scaling(self) -> None:
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        # No fixed page height: the page grows with its content and the window scrolls.
+        self.assertNotIn("Height = 1345", hub)
+        self.assertIn("var page = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true", hub)
+        # Dialogs scale like the main window (they used to stay at 100% while text grew).
+        dialog = hub.split("private static void StyleDialog(Form dialog, string title)", 1)[1].split("private static TableLayoutPanel DialogLayout()", 1)[0]
+        self.assertIn("dialog.AutoScaleMode = AutoScaleMode.Dpi;", dialog)
+        prompt = hub.split("internal sealed class TextPromptDialog : Form", 1)[1].split("internal sealed class DarkSlider", 1)[0]
+        self.assertIn("AutoScaleMode = AutoScaleMode.Dpi;", prompt)
+        # A built-in check lays everything out at 100-200% and reports clipping.
+        check = (ROOT / "qpro-hub" / "LayoutCheck.cs").read_text(encoding="utf-8")
+        self.assertIn("[1.0f, 1.25f, 1.5f, 1.75f, 2.0f]", check)
+        self.assertIn('"--layout-check"', hub)
+
 
 if __name__ == "__main__":
     unittest.main()

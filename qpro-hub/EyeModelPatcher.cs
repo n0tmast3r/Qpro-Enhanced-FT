@@ -286,7 +286,7 @@ internal static class EyeModelPatcher
                 "sh \"$MODPATH/patch.sh\" \"$OUT\" || { rm -f \"$OUT\"; abort \"! Patching failed; nothing was changed.\"; }\n" +
                 "if [ \"$(sha256sum \"$OUT\" | cut -d' ' -f1)\" != \"$PATCHED_SHA\" ]; then rm -f \"$OUT\"; abort \"! The patched model did not verify; nothing was changed.\"; fi\n" +
                 "set_perm \"$OUT\" 0 0 0644 u:object_r:vendor_configs_file:s0\n" +
-                "ui_print \"- Patched model verified. Reboot the headset to activate it, then redo eye calibration.\"\n",
+                "ui_print \"- Patched model verified. Restart the headset to activate it.\"\n",
             ["post-fs-data.sh"] =
                 "MODDIR=${0%/*}\n" +
                 ". \"$MODDIR/qpro-eye.conf\"\n" +

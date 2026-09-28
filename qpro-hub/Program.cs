@@ -36,6 +36,12 @@ internal static class Program
 
             ApplicationConfiguration.Initialize();
             Application.SetColorMode(SystemColorMode.Dark);
+            var layoutArgument = Array.FindIndex(args, value => value.Equals("--layout-check", StringComparison.OrdinalIgnoreCase));
+            if (layoutArgument >= 0)
+            {
+                if (layoutArgument + 1 >= args.Length) throw new ArgumentException("--layout-check requires an output folder.");
+                Environment.Exit(HubForm.RunLayoutCheck(root, Path.GetFullPath(args[layoutArgument + 1])));
+            }
             var renderArgument = Array.FindIndex(args, value => value.Equals("--render-preview", StringComparison.OrdinalIgnoreCase));
             if (renderArgument >= 0)
             {
@@ -142,7 +148,7 @@ internal sealed record DatasetChoice(DatasetInfo Dataset)
     public override string ToString() => $"{Dataset.DisplayName} · {Dataset.SampleCount} stills";
 }
 
-internal sealed class HubForm : Form
+internal sealed partial class HubForm : Form
 {
     private readonly string _root;
     private readonly string _stopFile;
@@ -197,6 +203,7 @@ internal sealed class HubForm : Form
     private bool _eyeModulePending;      // a recognized eye module is installed but only goes live at the next reboot
     private bool _eyeModuleInactive;     // our eye patch is installed but inactive (e.g. the firmware's eye model changed)
     private List<string>? _userEyeModuleIds; // module ids the user added (config/eye-modules.json); see UserEyeModuleIds
+    private bool _stopRequested;         // the user pressed Stop, so tracking exits are expected
     private bool _eyeModuleBusy;         // an eye-module install/choose flow is running (one at a time)
     private ConnectionMode _mode = ConnectionMode.Usb; // explicit transport choice
     private bool _autoConnectTried;      // one-shot wireless reconnect attempt on launch
@@ -259,6 +266,7 @@ internal sealed class HubForm : Form
 
         StyleModeButtons();
         ReloadProfiles();
+        if (LayoutCheckMode) return; // layout self-test: no headset polling or timers
         _ = RefreshStatusAsync();
         var timer = new System.Windows.Forms.Timer { Interval = 2500 };
         timer.Tick += async (_, _) => await RefreshStatusAsync();
@@ -275,7 +283,10 @@ internal sealed class HubForm : Form
     private Control BuildLayout()
     {
         var viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Background };
-        var page = new TableLayoutPanel { Dock = DockStyle.Top, Height = 1345, Padding = new Padding(24), ColumnCount = 1, RowCount = 5 };
+        // The page grows with its content (no fixed height), so larger Windows scaling or
+        // longer text never cuts off the bottom rows; the viewport scrolls instead.
+        var page = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(24), ColumnCount = 1, RowCount = 5 };
+        page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -296,13 +307,21 @@ internal sealed class HubForm : Form
         heading.Controls.Add(modeRow);
         page.Controls.Add(heading, 0, 0);
 
+        // Three columns of name/value pairs, so long values (a Wi-Fi address, "Not working
+        // · step 3") have room even at 150-200% Windows scaling.
         var statuses = Card();
-        statuses.ColumnCount = 6;
-        statuses.RowCount = 2;
-        foreach (var label in new[] { "Headset link", "SteamVR", "VRCFaceTracking", "Combined bridge", "PC runtime", "Gaze support" })
-            statuses.Controls.Add(new Label { Text = label, AutoSize = true, ForeColor = Muted, Margin = new Padding(8, 5, 25, 2) });
-        foreach (var label in new[] { _usbStatus, _steamStatus, _vrcftStatus, _bridgeStatus, _runtimeStatus, _gazeStatus })
-            statuses.Controls.Add(label);
+        statuses.ColumnCount = 3;
+        statuses.RowCount = 4;
+        for (var column = 0; column < 3; column++) statuses.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        var statusNames = new[] { "Headset link", "SteamVR", "VRCFaceTracking", "Combined bridge", "PC runtime", "Gaze support" };
+        var statusValues = new[] { _usbStatus, _steamStatus, _vrcftStatus, _bridgeStatus, _runtimeStatus, _gazeStatus };
+        for (var index = 0; index < statusNames.Length; index++)
+        {
+            var column = index % 3;
+            var row = index / 3 * 2;
+            statuses.Controls.Add(new Label { Text = statusNames[index], AutoSize = true, ForeColor = Muted, Margin = new Padding(8, 5, 12, 2) }, column, row);
+            statuses.Controls.Add(statusValues[index], column, row + 1);
+        }
         page.Controls.Add(statuses, 0, 1);
 
         var tracking = Card();
@@ -660,6 +679,7 @@ internal sealed class HubForm : Form
 
     private void BeginSetupProgress(string label)
     {
+        _lastError = null;
         _setupProgressContainer.Visible = true;
         _setupProgress.IsIndeterminate = true;
         _setupProgress.Value = 0;
@@ -674,7 +694,7 @@ internal sealed class HubForm : Form
     {
         _setupProgress.IsIndeterminate = false;
         _setupProgress.Value = succeeded ? 100 : 0;
-        _setupProgressStatus.Text = succeeded ? label + " completed successfully." : label + " did not complete. See Activity for details.";
+        _setupProgressStatus.Text = succeeded ? label + " completed successfully." : label + " did not complete" + (_lastError is null ? "." : $" ({_lastError.Code}: {_lastError.Title}).");
         _setupProgressStatus.ForeColor = succeeded ? Good : Bad;
         SetSetupButtonsEnabled(true);
     }
@@ -761,8 +781,12 @@ internal sealed class HubForm : Form
         if (!Process.GetProcessesByName("VRCFaceTracking").Any()) missing.Add("VRCFaceTracking");
         if (!BridgeInstalled()) missing.Add("the combined Qpro VRCFT bridge — use First-time setup step 2");
         if (!BackendReady()) missing.Add("the PC runtime — use First-time setup step 1");
-        if (!_skipGaze.Checked && !EyeModelReady()) missing.Add(_eyeModulePending
-            ? "a headset reboot — your eye module goes live when the headset restarts (then re-apply root if needed and redo eye calibration)"
+        if (!_skipGaze.Checked && !EyeModelReady()) missing.Add(CurrentEyeStage() == "not-working"
+            ? "a working eye module — the one on the headset isn't working (see First-time setup step 3 for the next step), or tick \"Skip eye gaze (tongue only)\""
+            : CurrentEyeStage() is "awaiting-restart" or "reverting"
+                ? "a headset restart to finish the eye-module change (First-time setup step 3 can restart it for you)"
+                : _eyeModulePending
+            ? "a headset restart — your eye module goes live when the headset restarts (First-time setup step 3 can restart it for you)"
             : _eyeModuleInactive
                 ? "an active eye patch — yours is installed but inactive (the headset's eye model changed, e.g. after a firmware update); rebuild it in First-time setup step 3 (Manage eye module → Create my eye patch)"
                 : "an independent-eye Magisk module on the headset — use First-time setup step 3 (Manage eye module), or tick \"Skip eye gaze (tongue only)\"");
@@ -770,6 +794,7 @@ internal sealed class HubForm : Form
         if (missing.Count > 0) { PlaySfx("warning.wav"); MessageBox.Show(this, "Before applying tracking, start or provide:\n\n• " + string.Join("\n• ", missing), "Not ready"); return; }
 
         File.Delete(_stopFile);
+        _stopRequested = false;
         _start.Enabled = false; _stop.Enabled = true;
         _runStatus.Text = "● Starting…"; _runStatus.ForeColor = Warning;
         try
@@ -795,8 +820,7 @@ internal sealed class HubForm : Form
         {
             AppendLog("START FAILED: " + error.Message);
             await StopTrackingAsync();
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, error.Message, "Tracking did not start");
+            ShowError(ErrorCodes.Diagnose(error.Message, ErrorCodes.ReleaseIncomplete), error.Message, "Tracking did not start");
         }
     }
 
@@ -804,6 +828,7 @@ internal sealed class HubForm : Form
     {
         if (_stopping) return;
         _stopping = true;
+        _stopRequested = true;
         _runStatus.Text = "● Stopping cleanly…"; _runStatus.ForeColor = Warning;
         try
         {
@@ -834,9 +859,29 @@ internal sealed class HubForm : Form
         var start = PowerShellStart(script, arguments, hidden: true);
         start.RedirectStandardOutput = true; start.RedirectStandardError = true;
         var process = new Process { StartInfo = start, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog($"[{label}] {e.Data}"); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendLog($"[{label}] {e.Data}"); };
-        process.Exited += (_, _) => BeginInvoke(() => { AppendLog($"[{label}] exited with code {process.ExitCode}."); UpdateControlState(); });
+        var output = new StringBuilder();
+        void Capture(string? line)
+        {
+            if (line is null) return;
+            lock (output) { output.AppendLine(line); if (output.Length > 200_000) output.Remove(0, 100_000); }
+            AppendLog($"[{label}] {line}");
+        }
+        process.OutputDataReceived += (_, e) => Capture(e.Data);
+        process.ErrorDataReceived += (_, e) => Capture(e.Data);
+        process.Exited += (_, _) => BeginInvoke(() =>
+        {
+            AppendLog($"[{label}] exited with code {process.ExitCode}.");
+            UpdateControlState();
+            // A crash or failed start (not the user's Stop): say what happened and what to do.
+            if (process.ExitCode != 0 && !_stopRequested)
+            {
+                string text;
+                lock (output) text = output.ToString();
+                _runStatus.Text = "● Stopped with an error"; _runStatus.ForeColor = Bad;
+                _start.Enabled = true; _stop.Enabled = _trackingProcesses.Any(p => !p.HasExited);
+                ShowError(ErrorCodes.Diagnose(text, ErrorCodes.TrackingExited), ErrorCodes.LastErrorLine(text), label);
+            }
+        });
         if (!process.Start()) throw new InvalidOperationException($"Could not start {label}.");
         process.BeginOutputReadLine(); process.BeginErrorReadLine();
         _trackingProcesses.Add(process);
@@ -847,6 +892,7 @@ internal sealed class HubForm : Form
     private async Task<bool> RunUtilityAsync(string label, string script, params string[] args)
     {
         if (_trackingProcesses.Any(p => !p.HasExited)) { MessageBox.Show(this, "Stop live tracking before starting this action."); return false; }
+        var output = new StringBuilder();
         try
         {
             AppendLog($"Starting {label}…");
@@ -854,15 +900,28 @@ internal sealed class HubForm : Form
             start.RedirectStandardOutput = true;
             start.RedirectStandardError = true;
             using var process = new Process { StartInfo = start };
-            process.OutputDataReceived += (_, e) => { if (e.Data is not null) { AppendLog($"[{label}] {e.Data}"); HandleTrainingProgress(label, e.Data); } };
-            process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { AppendLog($"[{label}] {e.Data}"); HandleTrainingProgress(label, e.Data); } };
-            if (!process.Start()) { AppendLog($"Could not start {label}."); return false; }
+            void Capture(string? line)
+            {
+                if (line is null) return;
+                lock (output) output.AppendLine(line);
+                AppendLog($"[{label}] {line}");
+                HandleTrainingProgress(label, line);
+            }
+            process.OutputDataReceived += (_, e) => Capture(e.Data);
+            process.ErrorDataReceived += (_, e) => Capture(e.Data);
+            if (!process.Start()) { ShowError(ErrorCodes.ReleaseIncomplete, $"Could not start {label}."); return false; }
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             await process.WaitForExitAsync();
             AppendLog($"{label} finished with code {process.ExitCode}.");
             if (process.ExitCode != 0)
-                throw new InvalidOperationException($"{label} failed with code {process.ExitCode}. See Activity for the exact error and suggested fix.");
+            {
+                string text;
+                lock (output) text = output.ToString();
+                var fallback = label.Contains("training", StringComparison.OrdinalIgnoreCase) ? ErrorCodes.TrainingFailed : ErrorCodes.Unknown;
+                ShowError(ErrorCodes.Diagnose(text, fallback), ErrorCodes.LastErrorLine(text), label + " failed");
+                return false;
+            }
             ReloadProfiles();
             await RefreshStatusAsync();
             return true;
@@ -870,9 +929,19 @@ internal sealed class HubForm : Form
         catch (Exception error)
         {
             AppendLog($"{label} failed: {error.Message}");
-            MessageBox.Show(this, error.Message, label + " failed");
+            ShowError(ErrorCodes.Diagnose(error.Message), error.Message, label + " failed");
             return false;
         }
+    }
+
+    // One place for user-facing failures: a code, what went wrong and what to do.
+    private HubError? _lastError;
+    private void ShowError(HubError error, string? detail = null, string? caption = null)
+    {
+        _lastError = error;
+        AppendLog($"{error.Code}: {error.Title}" + (string.IsNullOrWhiteSpace(detail) ? "" : $" ({detail!.Trim()})"));
+        PlaySfx("warning.wav");
+        MessageBox.Show(this, error.Message(detail), caption is null ? error.Heading : $"{caption} · {error.Code}", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void BeginTrainingProgress(bool quick)
@@ -1273,6 +1342,7 @@ internal sealed class HubForm : Form
         // for it over the active connection (USB serial, or the paired Wi-Fi target).
         var connectedTarget = _mode == ConnectionMode.Usb ? usbSerial : (wireless ? _wirelessTarget : null);
         var eyeScan = connectedTarget is null ? null : await ScanEyeModulesAsync(connectedTarget);
+        if (eyeScan is not null) await MaybeAutoCheckEyeModuleAsync(connectedTarget!, eyeScan);
         _eyeModuleActive = eyeScan is not null && eyeScan.Active.Count > 0;
         _eyeModulePending = eyeScan is not null && !_eyeModuleActive && eyeScan.Pending.Count > 0;
         _eyeModuleInactive = eyeScan is not null && !_eyeModuleActive && !_eyeModulePending && eyeScan.Inactive.Count > 0;
@@ -1286,7 +1356,7 @@ internal sealed class HubForm : Form
         SetStatus(_vrcftStatus, vrcft ? StatusKind.Good : StatusKind.Bad, vrcft ? "Running" : "Not running");
         SetStatus(_bridgeStatus, BridgeInstalled() ? StatusKind.Good : StatusKind.Warning, BridgeInstalled() ? "Installed" : "Setup needed");
         SetStatus(_runtimeStatus, BackendReady() ? StatusKind.Good : StatusKind.Warning, BackendReady() ? "Ready" : "Setup needed");
-        SetStatus(_gazeStatus, EyeModelReady() ? StatusKind.Good : StatusKind.Warning, EyeModelReady() ? "Convergence on" : _eyeModulePending ? "Reboot headset" : _eyeModuleInactive ? "Patch inactive" : "Module needed");
+        SetStatus(_gazeStatus, EyeModelReady() ? StatusKind.Good : CurrentEyeStage() == "not-working" ? StatusKind.Bad : StatusKind.Warning, GazeStatusText());
         UpdateSetupStepStyles();
         UpdateControlState();
         }
@@ -1504,7 +1574,7 @@ internal sealed class HubForm : Form
 
     private List<string> RecognizedEyeModuleIds() => BuiltInEyeModuleIds.Concat(UserEyeModuleIds).Distinct(StringComparer.Ordinal).ToList();
 
-    private sealed record EyeModuleScan(IReadOnlyList<string> Active, IReadOnlyList<string> Pending, IReadOnlyList<string> Inactive);
+    private sealed record EyeModuleScan(IReadOnlyList<string> Active, IReadOnlyList<string> Pending, IReadOnlyList<string> Inactive, string BootId = "");
 
     // Which recognized independent-eye modules are on the headset. Active = installed,
     // enabled and not flagged for removal; Pending = a fresh install that only goes live at
@@ -1525,7 +1595,7 @@ internal sealed class HubForm : Form
         // `su -c '<compound>'` must be ONE shell argument: adb joins multiple args with
         // spaces and drops quoting, which would otherwise run the loop as the shell user
         // (not root) and never print anything.
-        var shellArg = "su -c 'for m in " + string.Join(" ", recognized) +
+        var shellArg = "su -c 'echo BOOT:$(cat /proc/sys/kernel/random/boot_id); for m in " + string.Join(" ", recognized) +
             "; do d=/data/adb/modules/$m; test -d $d || continue; test -e $d/disable && continue; test -e $d/remove && continue; " +
             "if test -e $d/update && ! ls $d | grep -qvxE \"module[.]prop|update\"; then echo PENDING:$m; " +
             "elif test -f $d/qpro_status && ! grep -qx mounted $d/qpro_status; then echo INACTIVE:$m; else echo ACTIVE:$m; fi; done'";
@@ -1533,13 +1603,14 @@ internal sealed class HubForm : Form
         var active = new List<string>();
         var pending = new List<string>();
         var inactive = new List<string>();
+        var bootId = probe.Output.Split('\n').Select(line => line.Trim()).FirstOrDefault(line => line.StartsWith("BOOT:", StringComparison.Ordinal))?[5..] ?? "";
         foreach (var line in probe.Output.Split('\n'))
         {
             var match = Regex.Match(line.Trim(), @"^(ACTIVE|PENDING|INACTIVE):(\S+)$");
             if (!match.Success || !recognized.Contains(match.Groups[2].Value)) continue;
             (match.Groups[1].Value switch { "ACTIVE" => active, "PENDING" => pending, _ => inactive }).Add(match.Groups[2].Value);
         }
-        return new(active, pending, inactive);
+        return new(active, pending, inactive, Regex.IsMatch(bootId, @"^[0-9a-f-]{36}$") ? bootId : "");
     }
 
     // True when ADB has root on the given headset (USB serial or Wi-Fi ip:port).
@@ -1560,30 +1631,22 @@ internal sealed class HubForm : Form
     {
         if (FindAdb() is null)
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, "The bundled Android tools could not be found. Re-extract the complete release.", "Android tools missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.AdbMissing);
             return false;
         }
         if (string.IsNullOrEmpty(target))
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(
-                this,
+            ShowError(_mode == ConnectionMode.Usb ? ErrorCodes.HeadsetNotFound : ErrorCodes.WifiUnreachable,
                 _mode == ConnectionMode.Usb
-                    ? "Connect the Quest Pro with a USB data cable — awake, Developer Mode on, and USB debugging accepted inside the headset — or switch the connection to Wi-Fi."
-                    : "Pair the headset first — press Enable / Connect Wi-Fi.",
-                "Quest Pro not found over ADB", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    ? "Quest Pro not found over ADB. Connect it with a USB data cable — awake, Developer Mode on, and USB debugging accepted inside the headset — or switch the connection to Wi-Fi."
+                    : "Quest Pro not found over ADB. Pair the headset first — press Enable / Connect Wi-Fi.");
             return false;
         }
         AppendLog("Checking Magisk root on the headset…");
         if (await HeadsetRootedAsync(target)) return true;
-        PlaySfx("warning.wav");
-        MessageBox.Show(
-            this,
-            "ADB can see your Quest Pro, but root access was not granted.\n\nOn the headset, grant Superuser access to Shell / ADB Shell (com.android.shell):\n  1. Open the Magisk app\n  2. Tap Superuser\n  3. Enable \"Shell\"\n\nIf a Magisk prompt just appeared on the headset, tap Grant. Then try this again.",
-            "Quest Pro root access is unavailable",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Warning);
+        ShowError(ErrorCodes.RootMissing,
+            "ADB can see your Quest Pro, but root access was not granted. On the headset, grant Superuser access to Shell / ADB Shell (com.android.shell): open the Magisk app, tap Superuser, enable \"Shell\". If a Magisk prompt just appeared on the headset, tap Grant.",
+            "Quest Pro root access is unavailable");
         return false;
     }
 
@@ -1599,7 +1662,7 @@ internal sealed class HubForm : Form
         return null;
     }
 
-    private enum EyeModuleAction { None, InstallSergio, BuildPatch, InstallZip, ChooseInstalled }
+    private enum EyeModuleAction { None, InstallSergio, BuildPatch, InstallZip, ChooseInstalled, Restart, CheckNow, Revert, ReportNotWorking }
 
     // Setup step 3. Recommended: SergioMarquina's script-only module, bundled unmodified with
     // his permission. If it doesn't work on a headset, the fallback is our own patch built from
@@ -1610,34 +1673,65 @@ internal sealed class HubForm : Form
     // on an older firmware build.
     private async Task ShowEyeModuleSetupAsync()
     {
-        var (state, stateColor) = _eyeModuleActive
-            ? ("● Convergence on — a recognized eye module is live on the headset.", Good)
-            : _eyeModulePending
-                ? ("● Reboot needed — your eye module goes live when the headset restarts.", Warning)
-                : _eyeModuleInactive
-                    ? ("● Your eye patch is inactive — the headset's eye model changed; create it again.", Warning)
-                    : ("○ No recognized eye module detected (or the headset isn't connected).", Muted);
         if (_eyeModuleBusy) return;
-        EyeModuleAction action;
-        using (var dialog = new EyeModuleSetupDialog(EyeModuleSetupText(), EyeModuleAdvancedText(), state, stateColor))
+        // Up to date before showing where things stand (cheap; the full check is on request).
+        var action = EyeModuleAction.None;
+        for (var round = 0; round < 3; round++)
         {
-            dialog.ShowDialog(this);
-            action = dialog.Action;
+            var (status, statusColor) = EyeStatusLine();
+            var (nextText, nextAction, nextLabel) = EyeNextStep();
+            var stage = CurrentEyeStage();
+            var others = new List<(EyeModuleAction, string)>();
+            void Offer(EyeModuleAction candidate, string label) { if (candidate != nextAction) others.Add((candidate, label)); }
+            Offer(EyeModuleAction.InstallSergio, "Install Sergio's module…");
+            Offer(EyeModuleAction.BuildPatch, "Create my eye patch…");
+            Offer(EyeModuleAction.CheckNow, "Check now");
+            Offer(EyeModuleAction.Restart, "Restart headset");
+            Offer(EyeModuleAction.Revert, "Revert to stock…");
+            if (stage is "working" or "unverified") Offer(EyeModuleAction.ReportNotWorking, "My eyes still move together");
+            using (var dialog = new EyeModuleGuideDialog(status, statusColor, nextText, nextAction, nextLabel, others, EyeModuleSetupText(), EyeModuleAdvancedText()))
+            {
+                dialog.ShowDialog(this);
+                action = dialog.Action;
+            }
+            if (action != EyeModuleAction.ReportNotWorking) break;
+            ReportEyesStillCoupled();
+            await RefreshStatusAsync(); // then show the dialog again with the next suggestion
         }
-        if (action == EyeModuleAction.None || _eyeModuleBusy) return;
+        if (action is EyeModuleAction.None or EyeModuleAction.ReportNotWorking || _eyeModuleBusy) return;
         _eyeModuleBusy = true;
         SetSetupButtonsEnabled(false);
         try
         {
-            if (action == EyeModuleAction.InstallSergio) await InstallSergioModuleAsync();
-            else if (action == EyeModuleAction.BuildPatch) await BuildOwnEyePatchAsync();
-            else if (action == EyeModuleAction.InstallZip) await InstallUserEyeModuleAsync();
-            else await ChooseInstalledEyeModulesAsync();
+            switch (action)
+            {
+                case EyeModuleAction.InstallSergio: await InstallSergioModuleAsync(); break;
+                case EyeModuleAction.BuildPatch: await BuildOwnEyePatchAsync(); break;
+                case EyeModuleAction.InstallZip: await InstallUserEyeModuleAsync(); break;
+                case EyeModuleAction.ChooseInstalled: await ChooseInstalledEyeModulesAsync(); break;
+                case EyeModuleAction.Revert: await RevertToStockAsync(); break;
+                case EyeModuleAction.CheckNow:
+                {
+                    var target = await ActiveTargetAsync();
+                    if (target is null) { ShowError(_mode == ConnectionMode.Usb ? ErrorCodes.HeadsetNotFound : ErrorCodes.WifiUnreachable, null, "Eye module check"); break; }
+                    await CheckEyeModuleNowAsync(target, showResult: true);
+                    if (CurrentEyeStage() == "none" && EyeState.ContinueWith == "own-patch") await ContinueAfterRevertAsync();
+                    break;
+                }
+                case EyeModuleAction.Restart:
+                {
+                    var target = await ActiveTargetAsync();
+                    if (target is null) { ShowError(_mode == ConnectionMode.Usb ? ErrorCodes.HeadsetNotFound : ErrorCodes.WifiUnreachable, null, "Restart headset"); break; }
+                    await OfferRestartAndCheckAsync(target, "This applies eye-module changes. If your controllers stopped tracking after installing a module, the restart fixes that too.");
+                    break;
+                }
+            }
+            await RefreshStatusAsync();
         }
         catch (Exception error)
         {
             AppendLog($"Eye module setup failed: {error.Message}");
-            MessageBox.Show(this, error.Message, "Eye module setup failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.Unknown, error.Message, "Eye module setup failed");
         }
         finally
         {
@@ -1649,11 +1743,9 @@ internal sealed class HubForm : Form
     private string EyeModuleSetupText()
     {
         var yours = UserEyeModuleIds;
-        return "Eye convergence needs an independent-eye Magisk module on the headset. No Meta files are shipped or downloaded. Choose one:\n\n" +
-            "• Install Sergio's module (recommended): SergioMarquina's \"Quest Pro Individual Eye Enabler\", bundled with his permission. It patches this headset's own eye model on-device.\n" +
-            "• Create my eye patch: if Sergio's doesn't install or doesn't work on your headset, the hub reads this headset's own eye model, works out where its eye-blend gate is, and builds a small Magisk module that patches your own copy on the headset.\n" +
-            "\n" +
-            "Run only ONE eye-model module at a time, and install or change it BEFORE starting Virtual Desktop. Afterwards reboot the headset, re-apply root if your root method needs it, and redo eye-tracking calibration (Settings > Movement tracking). To revert, disable the module in the Magisk app and reboot. Only install modules you trust.\n\n" +
+        return "Eye convergence needs one independent-eye Magisk module on the headset. No Meta files are shipped or downloaded. " +
+            "Sergio's module (recommended) is bundled with his permission; Create my eye patch builds a patch from your own headset's eye model if Sergio's doesn't work. " +
+            "Install or change modules before starting Virtual Desktop. Revert to stock removes them again. You don't need to redo eye-tracking calibration.\n\n" +
             "Recognized: your eye patch, Quest Pro Independent Eye Gaze, Quest Pro Individual Eye Enabler" +
             (yours.Count > 0 ? ", and yours: " + string.Join(", ", yours) : "") + ".";
     }
@@ -1668,11 +1760,10 @@ internal sealed class HubForm : Form
 
     private static string EyeModuleFinishSteps() =>
         "To finish:\n" +
-        "1. Reboot the headset.\n" +
-        "2. Re-apply root if your root method needs it after a reboot.\n" +
-        "3. Redo eye-tracking calibration (Settings > Movement tracking).\n" +
-        "4. Then start Virtual Desktop.\n\n" +
-        "The hub shows \"Convergence on\" once the module is live.";
+        "1. Restart the headset (the hub can do it for you now).\n" +
+        "2. Re-apply root after the restart if your root method needs it.\n" +
+        "3. Then start Virtual Desktop.\n\n" +
+        "The hub checks the module after the restart and shows \"Convergence on\" once it's verified. You don't need to redo eye-tracking calibration.";
 
     // Install a module .zip the user supplies. Nothing is bundled: the zip comes from the
     // user, is shown to them (module.prop) before anything happens, and is installed with
@@ -1761,34 +1852,31 @@ internal sealed class HubForm : Form
         var disabled = installed && disableOthers ? await DisableEyeModulesAsync(adb, target, others) : new List<string>();
         if (installed && isEyeModule && !BuiltInEyeModuleIds.Contains(module.Id) && !UserEyeModuleIds.Contains(module.Id))
             SaveUserEyeModuleIds(UserEyeModuleIds.Append(module.Id));
+        if (!installed) _lastError = ErrorCodes.MagiskInstallFailed;
         await RefreshStatusAsync();
         FinishSetupProgress(installed, "Install eye module");
         SetSetupButtonsEnabled(false); // the eye-module flow re-enables them when it ends
         if (!installed)
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(
-                this,
-                "Magisk could not install " + module.Name + ". See Activity for Magisk's output.\n\n" +
-                (failureHint is null ? "" : "• " + failureHint + "\n") +
-                "• Check that the module supports your firmware and Magisk version.\n" +
-                "• Some modules need another module first (for example Magisk OverlayFS). Install that one first: here (answer No when asked whether it is your eye module) or in the Magisk app.",
-                "Eye module not installed",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.MagiskInstallFailed,
+                "Magisk could not install " + module.Name + "." + (failureHint is null ? "" : "\n" + failureHint) +
+                "\nIf it needs a helper module first (for example Magisk OverlayFS), install that one first: here (answer No when asked whether it is your eye module) or in the Magisk app.",
+                "Eye module not installed");
             return;
         }
+        _setupProgressContainer.Visible = false;
+        if (isEyeModule) RecordEyeModuleChange(MethodOf(module.Id), module.Id, await ReadBootIdAsync(adb, target));
+        await RefreshStatusAsync();
         var notDisabled = others.Except(disabled).ToList();
         PlaySfx("succeed.wav");
-        MessageBox.Show(
-            this,
-            module.Name + (isEyeModule ? " is installed." : " is installed as a helper module (not as your eye module).") + "\n\n" + EyeModuleFinishSteps() +
-            (disabled.Count > 0 ? "\n\nDisabled in Magisk: " + string.Join(", ", disabled) + " (re-enable from the Magisk app)." : "") +
-            (notDisabled.Count > 0 ? "\n\nStill enabled: " + string.Join(", ", notDisabled) + ". Disable it in the Magisk app so only one eye module runs." : ""),
-            "Eye module installed",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
-        _setupProgressContainer.Visible = false;
+        var summary = module.Name + (isEyeModule ? " is installed." : " is installed as a helper module (not as your eye module).") +
+            (disabled.Count > 0 ? "\n\nSwitched off in Magisk: " + string.Join(", ", disabled) + " (re-enable from the Magisk app)." : "") +
+            (notDisabled.Count > 0 ? "\n\nStill enabled: " + string.Join(", ", notDisabled) + ". Disable it in the Magisk app so only one eye module runs." : "") +
+            (module.Id == SergioModuleId
+                ? "\n\nSergio's installer restarts the headset's tracking service right away. On some headsets (for example v2.6 firmware) that stops controller tracking until the headset restarts. Restarting now fixes it. (His installer also suggests redoing eye calibration; that isn't needed.)"
+                : "");
+        if (!await OfferRestartAndCheckAsync(target, summary + "\n\nA restart switches the module on (recommended now)."))
+            MessageBox.Show(this, summary + "\n\n" + EyeModuleFinishSteps(), "Eye module installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // SergioMarquina's "Quest Pro Individual Eye Enabler", bundled unmodified with his
@@ -1817,8 +1905,7 @@ internal sealed class HubForm : Form
             var path = Path.Combine(folder, name);
             if (!File.Exists(path))
             {
-                PlaySfx("warning.wav");
-                MessageBox.Show(this, "Sergio's module is missing from this release (" + name + "). Re-extract the complete release.", "Install Sergio's module", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowError(ErrorCodes.SergioFilesChanged, "Missing from this release: sergio-eye-module\\" + name + ".", "Install Sergio's module");
                 return;
             }
             var bytes = File.ReadAllBytes(path);
@@ -1826,8 +1913,7 @@ internal sealed class HubForm : Form
             if (EyeModelPatcher.Sha256(bytes) != expected) bytes = WithoutCarriageReturns(bytes);
             if (EyeModelPatcher.Sha256(bytes) != expected)
             {
-                PlaySfx("warning.wav");
-                MessageBox.Show(this, "Sergio's module files in this release have been changed (" + name + "), so they were not installed. Re-extract the complete release.", "Install Sergio's module", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowError(ErrorCodes.SergioFilesChanged, "Changed in this release: sergio-eye-module\\" + name + ", so nothing was installed.", "Install Sergio's module");
                 return;
             }
             files.Add((name, bytes));
@@ -1848,7 +1934,7 @@ internal sealed class HubForm : Form
                 zipPath, module, isEyeModule: true, target!,
                 "Install Sergio's module on the headset?\n\n" + module.Name + " " + module.Version + " by " + module.Author +
                 ", bundled with his permission. It patches this headset's own eye model on-device and turns off the eye-tracking filter properties; it contains no Meta files.\n\n" +
-                "It supports one specific stock eye model. If it doesn't install, or your eyes still move together after the reboot and recalibration, use Create my eye patch instead.",
+                "It supports one specific stock eye model. After installing, the hub offers to restart the headset and then checks whether it worked. If it didn't, the hub guides you to Create my eye patch.",
                 "Sergio's module supports one specific stock eye model and refuses other firmware. Use Create my eye patch instead.");
         }
         finally
@@ -1882,8 +1968,7 @@ internal sealed class HubForm : Form
         var probe = await RunAdbProbeAsync(adb, ["-s", target!, "shell", probeCommand], 20);
         if (!probe.Completed || !probe.Output.Contains("QPRO_PROBE_DONE", StringComparison.Ordinal))
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, "Could not read the headset's eye model. Check that it is awake and root is granted, then try again.", "Create my eye patch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.EyeModelUnreadable, null, "Create my eye patch");
             return;
         }
         var lines = probe.Output.Replace("\r", "").Split('\n');
@@ -1899,19 +1984,26 @@ internal sealed class HubForm : Form
         else source = hashes.FirstOrDefault(pair => EyeModelPatcher.TestedStockModels.ContainsKey(pair.Value)).Key;
         if (source is null)
         {
+            // Another module (for example Sergio's) is mounted over the model. Offer to go back
+            // to stock first; the hub continues with the patch after the restart.
+            _lastError = ErrorCodes.EyeModelCovered;
+            AppendLog($"{ErrorCodes.EyeModelCovered.Code}: {ErrorCodes.EyeModelCovered.Title}");
             PlaySfx("warning.wav");
-            MessageBox.Show(
-                this,
-                "Another eye module is patching the headset's eye model right now, so the stock model can't be read.\n\n" +
-                "Disable or remove that module (Magisk app, or Manage eye module), reboot the headset, re-apply root, then create your patch again.",
-                "Create my eye patch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (MessageBox.Show(
+                    this,
+                    "Another eye module is patching the headset's eye model right now, so your own patch can't be built from the stock model yet.\n\n" +
+                    "Go back to stock first? The hub removes the other module, restarts the headset, and then continues with Create my eye patch.\n\n" +
+                    $"(Error code {ErrorCodes.EyeModelCovered.Code})",
+                    "Create my eye patch",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) == DialogResult.Yes)
+                await RevertToStockAsync(thenBuildPatch: true);
             return;
         }
         var stock = await ReadHeadsetFileAsync(adb, target!, source);
         if (stock is null || EyeModelPatcher.Sha256(stock) != hashes[source])
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, "The eye model could not be read completely. Try again.", "Create my eye patch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.EyeModelUnreadable, "The eye model could not be read completely.", "Create my eye patch");
             return;
         }
         var stockSha = hashes[source];
@@ -1921,8 +2013,7 @@ internal sealed class HubForm : Form
         {
             var reason = error is EyeModelPatcher.PatchException ? error.Message : "The eye model has a layout the hub doesn't recognize.";
             AppendLog($"[Eye patch] {reason} ({error.GetType().Name})");
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, reason + "\n\nNothing was changed on the headset.", "Create my eye patch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.EyeModelUnknown, reason + (firmware.Length > 0 ? $" Firmware: {firmware}." : ""), "Create my eye patch");
             return;
         }
         AppendLog($"[Eye patch] firmware {firmware}, model {stockSha[..12]}… from {source}: {plan.Summary}");
@@ -1950,7 +2041,7 @@ internal sealed class HubForm : Form
             await InstallEyeModuleZipAsync(
                 zipPath, module, isEyeModule: true, target!,
                 $"Install your eye patch ({(mode == EyeModelPatcher.PatchMode.Gate ? "gate patch" : "exact rewire")}) on the headset?\n\n" +
-                "It is built from this headset's own eye model and contains no Meta files. On install it copies your model, applies the edits and checks the result by SHA-256; at boot it mounts the patched copy over the original. Remove it in Magisk and reboot to go back to stock.");
+                "It is built from this headset's own eye model and contains no Meta files. On install it copies your model, applies the edits and checks the result by SHA-256; at boot it mounts the patched copy over the original. Revert to stock (in Manage eye module) removes it again.");
         }
         finally
         {
@@ -2247,8 +2338,7 @@ internal sealed class HubForm : Form
     {
         if (FindAdb() is null)
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(this, "The bundled Android tools could not be found. Re-extract the complete release.", "Android tools missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowError(ErrorCodes.AdbMissing);
             return;
         }
         // With a cable present this is first-time pairing: enable ADB-over-Wi-Fi
@@ -2270,7 +2360,7 @@ internal sealed class HubForm : Form
         var output = new StringBuilder();
         using var process = new Process { StartInfo = start };
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) { AppendLog($"[Wi-Fi] {e.Data}"); lock (output) output.AppendLine(e.Data); } };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendLog($"[Wi-Fi] {e.Data}"); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { AppendLog($"[Wi-Fi] {e.Data}"); lock (output) output.AppendLine(e.Data); } };
         if (!process.Start()) { AppendLog("Could not start the wireless helper."); return; }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -2291,15 +2381,10 @@ internal sealed class HubForm : Form
         }
         else
         {
-            PlaySfx("warning.wav");
-            MessageBox.Show(
-                this,
-                usb
-                    ? "Could not enable ADB over Wi-Fi.\n\n• Only one headset may be connected, awake, with USB debugging accepted on the headset.\n• Open Magisk > Superuser and grant Shell (ADB Shell), then press this again.\n\nSee Activity for the exact message."
-                    : "Could not reach the headset over Wi-Fi.\n\n• Make sure it is awake on this network.\n• If it has never been paired, connect USB once and press this again.\n• After a reboot, re-apply root on the headset if prompted.",
-                "Wireless connection failed",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowError(
+                ErrorCodes.Diagnose(captured, usb ? ErrorCodes.WifiEnableFailed : ErrorCodes.WifiUnreachable),
+                ErrorCodes.LastErrorLine(captured),
+                "Wireless connection failed");
         }
         await RefreshStatusAsync();
     }
@@ -2326,7 +2411,7 @@ internal sealed class HubForm : Form
     private bool BackendReady() => FindPythonRuntime() is not null;
     // Convergence comes from an independent-eye module the user supplies (installed from
     // their own .zip or marked as installed) that is live on the headset.
-    private bool EyeModelReady() => _eyeModuleActive;
+    private bool EyeModelReady() => _eyeModuleActive && CurrentEyeStage() is not ("not-working" or "awaiting-restart" or "reverting");
     private string VisibilityModeValue() => _visibilityMode.SelectedIndex switch { 1 => "camera", 2 => "native", 3 => "agreement", _ => "weighted" };
 
     private string? FindPythonRuntime()
@@ -2589,6 +2674,10 @@ internal sealed class HubForm : Form
 
     private static void StyleDialog(Form dialog, string title)
     {
+        // Scale with Windows display scaling like the main window. Without this the fixed
+        // widths below stay at 100% while the text grows, and text gets cut off at 150%+.
+        dialog.AutoScaleDimensions = new SizeF(96F, 96F);
+        dialog.AutoScaleMode = AutoScaleMode.Dpi;
         dialog.Text = title;
         dialog.StartPosition = FormStartPosition.CenterParent;
         dialog.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -2605,51 +2694,6 @@ internal sealed class HubForm : Form
 
     private static TableLayoutPanel DialogLayout() =>
         new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Padding = new Padding(20), BackColor = Panel, Location = Point.Empty };
-
-    // Setup step 3: explains the bring-your-own-module model and offers the two actions.
-    private sealed class EyeModuleSetupDialog : Form
-    {
-        public EyeModuleAction Action { get; private set; } = EyeModuleAction.None;
-
-        public EyeModuleSetupDialog(string guide, string advancedGuide, string state, Color stateColor)
-        {
-            StyleDialog(this, "Eye convergence module");
-            var layout = DialogLayout();
-            layout.Controls.Add(new Label { Text = state, AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = stateColor, Font = new Font(UiFontName, 10F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
-            layout.Controls.Add(new Label { Text = guide, AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = Color.White, Margin = new Padding(0, 0, 0, 18) });
-            var primary = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
-            primary.Controls.Add(DialogButton("Install Sergio's module (recommended)…", true, () => Choose(EyeModuleAction.InstallSergio)));
-            primary.Controls.Add(DialogButton("Create my eye patch…", false, () => Choose(EyeModuleAction.BuildPatch)));
-            layout.Controls.Add(primary);
-            // Other modules and marking an installed one are for advanced users; hidden until asked for.
-            var advanced = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Visible = false, BackColor = Panel, Margin = new Padding(0, 8, 0, 0) };
-            advanced.Controls.Add(new Label { Text = advancedGuide, AutoSize = true, MaximumSize = new Size(600, 0), ForeColor = Muted, Margin = new Padding(0, 0, 0, 8) });
-            var advancedActions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
-            advancedActions.Controls.Add(DialogButton("Install module (.zip)…", false, () => Choose(EyeModuleAction.InstallZip)));
-            advancedActions.Controls.Add(DialogButton("Choose installed…", false, () => Choose(EyeModuleAction.ChooseInstalled)));
-            advanced.Controls.Add(advancedActions);
-            var footer = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
-            DarkButton toggle = null!;
-            toggle = DialogButton("Advanced ▸", false, () =>
-            {
-                advanced.Visible = !advanced.Visible;
-                toggle.Text = advanced.Visible ? "Advanced ▾" : "Advanced ▸";
-            });
-            var close = DialogButton("Close", false, () => Choose(EyeModuleAction.None));
-            footer.Controls.Add(toggle);
-            footer.Controls.Add(close);
-            layout.Controls.Add(footer);
-            layout.Controls.Add(advanced);
-            Controls.Add(layout);
-            CancelButton = close;
-        }
-
-        private void Choose(EyeModuleAction action)
-        {
-            Action = action;
-            DialogResult = action == EyeModuleAction.None ? DialogResult.Cancel : DialogResult.OK;
-        }
-    }
 
     private sealed record EyeModuleEntry(string Id, string Label, bool BuiltIn, bool Checked);
 
@@ -2856,6 +2900,8 @@ internal sealed class TextPromptDialog : Form
 
     public TextPromptDialog(string title, string prompt, string initial, string fontName, Color background, Color panel, Color raised, Color border, Color accent)
     {
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = title;
         Size = new Size(520, 235);
         MinimumSize = new Size(440, 220);

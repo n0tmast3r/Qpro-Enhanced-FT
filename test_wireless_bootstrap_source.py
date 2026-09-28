@@ -174,8 +174,12 @@ class EyeModuleSourceTests(unittest.TestCase):
 
     def test_hub_offers_sergio_first(self):
         hub = Path("qpro-hub/Program.cs").read_text(encoding="utf-8")
-        self.assertIn('DialogButton("Install Sergio\'s module (recommended)…", true, () => Choose(EyeModuleAction.InstallSergio))', hub)
-        self.assertIn("if (action == EyeModuleAction.InstallSergio) await InstallSergioModuleAsync();", hub)
+        guide = Path("qpro-hub/EyeModuleGuide.cs").read_text(encoding="utf-8")
+        # With nothing tried yet, the guide's recommended next step is Sergio's module.
+        default = guide.split("private (string Text, EyeModuleAction Action, string Label) EyeNextStep()", 1)[1].split("default:", 1)[1].split("private (string Text, Color Color) EyeStatusLine()", 1)[0]
+        self.assertIn('EyeModuleAction.InstallSergio, "Install Sergio\'s module")', default)
+        self.assertIn("DialogButton(nextLabel", guide)                  # the recommendation is the emphasized button
+        self.assertIn("case EyeModuleAction.InstallSergio: await InstallSergioModuleAsync(); break;", hub)
         install = hub.split("private async Task InstallSergioModuleAsync()", 1)[1].split("private static byte[] WithoutCarriageReturns(", 1)[0]
         self.assertIn('Path.Combine(_root, "sergio-eye-module")', install)
         self.assertIn("EyeModelPatcher.Sha256(bytes) != expected", install)
@@ -208,7 +212,7 @@ class HubEyeModuleSourceTests(unittest.TestCase):
         # An update over a live install stays active (the old version is mounted until reboot).
         self.assertIn('grep -qvxE \\"module[.]prop|update\\"', scan)
         self.assertIn('["-s", target, "shell", shellArg]', scan)
-        self.assertIn("EyeModelReady() => _eyeModuleActive", source)
+        self.assertIn("EyeModelReady() => _eyeModuleActive &&", source)
 
     def test_module_ids_are_validated_before_any_shell_use(self):
         source = Path("qpro-hub/Program.cs").read_text(encoding="utf-8")
@@ -236,7 +240,8 @@ class HubEyeModuleSourceTests(unittest.TestCase):
         self.assertIn("MessageBoxButtons.OKCancel", install)          # user confirms the module.prop details
         self.assertIn("VirtualDesktop.Streamer", install)             # warns (does not block) while VD runs
         self.assertIn("MessageBoxButtons.YesNoCancel", install)       # offers to disable other eye modules
-        self.assertIn("EyeModuleFinishSteps()", install)              # reboot/root/recalibrate checklist
+        self.assertIn("EyeModuleFinishSteps()", install)              # restart/root checklist
+        self.assertIn("OfferRestartAndCheckAsync(", install)          # offers the restart right away
         self.assertIn('"Eye module or helper?"', install)             # helpers (e.g. OverlayFS) are not eye modules
         self.assertIn("installed && isEyeModule &&", install)          # only an eye module is remembered
         magisk = source.split("private async Task<bool> InstallMagiskModuleAsync(", 1)[1]
@@ -253,16 +258,59 @@ class HubEyeModuleSourceTests(unittest.TestCase):
         self.assertIn("if (_eyeModuleBusy) return;", setup)             # one eye-module flow at a time
         self.assertIn("SetSetupButtonsEnabled(false);", setup)
 
-    def test_hub_never_reboots_or_flips_properties_for_convergence(self):
-        source = Path("qpro-hub/Program.cs").read_text(encoding="utf-8")
-        # Clearing the eye-tracking filter properties was measured NOT to free the eyes
-        # on the stock model, and restarting trackingservice stopped controller tracking
-        # on an older firmware build, so the hub must never do either. Rebooting stays the
-        # user's call (the hub shows a checklist instead).
-        for forbidden in ("resetprop", "social_filtering", "stop trackingservice",
-                          "start trackingservice", "trackingfidelityservice",
-                          "install-eye-module.ps1", '"reboot"', "svc power reboot"):
-            self.assertNotIn(forbidden, source, forbidden)
+    def test_hub_never_flips_properties_and_restarts_only_when_asked(self):
+        # Clearing the eye-tracking filter properties from the PC was measured NOT to free
+        # the eyes on the stock model, and restarting trackingservice stopped controller
+        # tracking on an older firmware build, so the hub itself never does either (the
+        # modules do that on the headset). The only headset-wide action is a full restart,
+        # and only after the user confirms it.
+        hub = "".join(Path("qpro-hub", name).read_text(encoding="utf-8")
+                      for name in ("Program.cs", "EyeModuleGuide.cs", "ErrorCodes.cs", "LayoutCheck.cs"))
+        for forbidden in ("resetprop", "setprop", "stop trackingservice", "start trackingservice",
+                          "ctl.restart", "trackingfidelityservice", "install-eye-module.ps1", "svc power reboot"):
+            self.assertNotIn(forbidden, hub, forbidden)
+        self.assertEqual(hub.count('"reboot"'), 1)
+        guide = Path("qpro-hub/EyeModuleGuide.cs").read_text(encoding="utf-8")
+        restart = guide.split("private async Task<bool> RestartHeadsetAsync(", 1)[1].split("private async Task<bool> OfferRestartAndCheckAsync(", 1)[0]
+        self.assertIn('"reboot"', restart)
+        self.assertLess(restart.index("MessageBoxButtons.YesNo"), restart.index('"reboot"'))  # asks first
+        self.assertIn("Stop live tracking before restarting", restart)
+
+    def test_eye_module_progress_is_remembered_and_verified(self):
+        guide = Path("qpro-hub/EyeModuleGuide.cs").read_text(encoding="utf-8")
+        # Remembered per user (survives new release folders) and per headset serial.
+        self.assertIn('"QproFaceTracking", "eye-module-state.json"', guide)
+        self.assertIn("A different headset is connected", guide)
+        # A restart is detected by the headset's boot id, not by guessing.
+        self.assertIn("/proc/sys/kernel/random/boot_id", guide)
+        # Sergio's module is verified by the model the tracking service really sees.
+        self.assertIn('SergioPatchedMd5 = "499f8b1ab40a24e396a6f0c8d1184414"', guide)
+        sergio_script = Path("sergio-eye-module/patch_bolt.sh").read_text(encoding="utf-8")
+        self.assertIn("PATCHED_MD5=499f8b1ab40a24e396a6f0c8d1184414", sergio_script)
+        self.assertIn("STOCK_MD5=e76c2ea88de1e9ff1d7848a2c02ddde8", sergio_script)
+        # Our patch is verified by its own boot status and the served model's SHA-256.
+        self.assertIn('status == "mounted"', guide)
+        self.assertIn("check.ModelSha == patchedSha", guide)
+        # When something doesn't work, the guide points to the next option.
+        self.assertIn("ErrorCodes.SergioNotApplied", guide)
+        self.assertIn("EyeModuleAction.BuildPatch", guide)
+        self.assertIn("RevertToStockAsync(bool thenBuildPatch", guide)
+        # Revert flags every recognized module for Magisk removal (ids validated first).
+        revert = guide.split("private async Task RevertToStockAsync(", 1)[1].split("private void ReportEyesStillCoupled()", 1)[0]
+        self.assertIn(".Where(IsValidModuleId)", revert)
+        self.assertIn("touch /data/adb/modules/$m/remove", revert)
+        # The probe is read-only.
+        probe = guide.split("private async Task<EyeCheck?> ProbeEyeModulesAsync(", 1)[1].split("private static EyeVerdict EvaluateEyeCheck(", 1)[0]
+        for write in ("touch ", "rm ", "mount ", " > "):
+            self.assertNotIn(write, probe, write)
+
+    def test_no_recalibration_advice(self):
+        # Redoing eye-tracking calibration after installing a module isn't needed and was
+        # reported to risk corrupting calibration data, so nothing tells users to do it.
+        for path in ("qpro-hub/Program.cs", "qpro-hub/EyeModuleGuide.cs", "qpro-hub/EyeModelPatcher.cs", "README.md"):
+            text = Path(path).read_text(encoding="utf-8")
+            for advice in ("redo eye calibration", "redo eye-tracking calibration (", "Movement tracking)", "recalibrate"):
+                self.assertNotIn(advice, text, f"{path}: {advice}")
 
     def test_docs_describe_bring_your_own_module(self):
         readme = Path("README.md").read_text(encoding="utf-8")
@@ -352,7 +400,9 @@ class OwnEyePatchSourceTests(unittest.TestCase):
         read = hub.split("private static async Task<byte[]?> ReadHeadsetFileAsync(", 1)[1]
         self.assertIn('"exec-out", "su -c \'cat " + path + "\'"', read)
         self.assertIn("EyeModuleAction.BuildPatch", hub)
-        self.assertIn('DialogButton("Create my eye patch…", false', hub)   # the fallback, after Sergio's
+        self.assertIn('Offer(EyeModuleAction.BuildPatch, "Create my eye patch…")', hub)   # always available
+        guide = Path("qpro-hub/EyeModuleGuide.cs").read_text(encoding="utf-8")
+        self.assertIn('EyeModuleAction.BuildPatch, "Create my eye patch")', guide)          # suggested after Sergio's fails
 
     def test_zips_carrying_a_model_are_refused(self):
         hub = Path("qpro-hub/Program.cs").read_text(encoding="utf-8")
@@ -400,15 +450,12 @@ class HubConnectionModeSourceTests(unittest.TestCase):
         self.assertIn("_skipGaze.Checked && !_tongue.Checked", start)
 
     def test_eye_module_extras_are_under_advanced(self):
-        source = Path("qpro-hub/Program.cs").read_text(encoding="utf-8")
-        dialog = source.split("private sealed class EyeModuleSetupDialog : Form", 1)[1].split("private sealed record EyeModuleEntry", 1)[0]
+        source = Path("qpro-hub/EyeModuleGuide.cs").read_text(encoding="utf-8")
+        dialog = source.split("private sealed class EyeModuleGuideDialog : Form", 1)[1]
         advanced = dialog.split("var advanced = new TableLayoutPanel", 1)[1].split("var footer", 1)[0]
         self.assertIn("Visible = false", advanced)
         self.assertIn('"Install module (.zip)…"', advanced)
         self.assertIn('"Choose installed…"', advanced)
-        primary = dialog.split("var primary = new FlowLayoutPanel", 1)[1].split("var advanced = new TableLayoutPanel", 1)[0]
-        self.assertIn('"Install Sergio\'s module (recommended)…"', primary)
-        self.assertIn('"Create my eye patch…"', primary)
         self.assertIn('"Advanced ▸"', dialog)
 
     def test_mode_drives_transport_only(self):

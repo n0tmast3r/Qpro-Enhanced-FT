@@ -14,111 +14,63 @@ automatically generated “Source code” archives do not contain the large exec
 pretrained model, private Python installer, or bundled Android tools required to
 run the application.
 
-QproFaceTracking is an experimental, USB- or Wi-Fi-connected Quest Pro add-on for
-VRCFaceTracking. It keeps Virtual Desktop's normal face, brow, jaw, and blink data,
-then optionally replaces only:
+QproFaceTracking is an experimental Quest Pro add-on for VRCFaceTracking. It works
+over USB or Wi-Fi. It keeps the normal face, brow, jaw, and blink data from Virtual
+Desktop (or Steam Link), then optionally adds:
 
-- left/right gaze with independently preserved detector rays, allowing visible eye
-  divergence and convergence; and
-- detailed tongue channels with a personalized stereo model using the Quest Pro's
+- independent left/right eyes, so your avatar's eyes can converge and diverge,
+  through an eye module on the headset; and
+- detailed tongue channels from a personalized stereo model that uses the Quest Pro's
   two lower-face cameras.
 
 This is enthusiast research software, not a polished consumer driver. It requires a
-rooted Quest Pro. It runs over USB, or wirelessly over ADB-on-Wi-Fi once the
-headset has been paired.
+rooted Quest Pro.
 
 ## Requirements
 
 - Windows 10 or 11 x64
 - Rooted Quest Pro with face and eye tracking enabled
 - Magisk Superuser access granted to **Shell / ADB Shell**
-- Meta developer mode and an authorized USB debugging connection
+- Meta developer mode and an authorized USB debugging connection (also needed once
+  to set up Wi-Fi mode)
 - No separate ADB installation; the release includes the required official Android
   Platform-Tools files
-- SteamVR, Virtual Desktop or Steam Link, and VRCFaceTracking
+- SteamVR, Virtual Desktop **or** Steam Link, and VRCFaceTracking
 - A current NVIDIA display driver is strongly recommended for fast tongue-model
   training. NVIDIA hardware is optional; CPU training is supported but is much
   slower, especially for the full dataset.
-- GPU support for tongue tracking:
-  - **Live tracking** runs through ONNX Runtime + DirectML, so it uses any DirectX 12
-    GPU: NVIDIA, AMD or Intel. Without DirectML it falls back to PyTorch on the CPU.
-  - **Training / personalization** uses PyTorch, which is GPU-accelerated only on
-    NVIDIA (CUDA). On AMD or Intel it trains on the CPU, which works but is much slower.
-  - Tested so far on an NVIDIA RTX 5080 only; AMD should work through DirectML but has
-    not been tested yet.
+- Live tongue tracking runs through ONNX Runtime + DirectML, so it uses any DirectX 12
+  GPU (NVIDIA, AMD or Intel). Training uses PyTorch, which is only GPU-accelerated
+  on NVIDIA; on AMD or Intel it trains on the CPU.
 
 ## First run
-EYE CONVERGENCE: independent eyes need a Magisk module that patches the headset's own
-eye model and turns off the eye-tracking social filter. The hub installs SergioMarquina's
-module (bundled with his permission) and, if that doesn't work on your headset, can build
-our own patch from your headset's model.
+DISCLAIMER: Eye convergence may NOT work on every firmware. It has been tested on
+`51483620027600340` (v2.6) and `51503870021300340` (v2.7).
+
 1. Extract the entire release folder. Do not run the executable from inside the zip.
 2. Double-click `QproFaceTracking.exe`.
-3. Select **Set up PC runtime**. No preinstalled Python or PATH modification is
+3. Select **Install runtime** (step 1). No preinstalled Python or PATH modification is
    required. The release carries the official signed Python 3.12.10 installer and
-   silently installs a private per-user copy plus OpenCV, NumPy, PyTorch, and
-   ONNX Runtime (DirectML) under `%LOCALAPPDATA%\QproFaceTracking\runtime`. It
-   creates no launcher, shortcuts, file associations, or PATH entries. If Python 3.12
-   is already installed on the PC, setup reuses it as the base for its own private
-   environment instead of touching your installation. PyTorch is a large download,
-   but later release folders reuse the same runtime. Setup uses PyTorch's official
-   CUDA 12.8 wheel when an NVIDIA driver/GPU is detected and the official CPU wheel
-   otherwise.
-4. Close VRCFaceTracking, then select **Install VD bridge** (Virtual Desktop users) or
-   **Install Steam Link bridge** (Steam Link users, see [Steam Link](#steam-link)).
-   Restart VRCFT.
-5. Pick the **Connection** at the top of the hub — **USB** or **Wi-Fi**.
-   Eye convergence comes from an **independent-eye Magisk module** on the headset.
-   First-time setup **step 3 → Manage eye module** offers, in this order:
-   - **Install Sergio's module (recommended)** — SergioMarquina's "Quest Pro Individual
-     Eye Enabler", bundled unmodified with his permission (`sergio-eye-module/`; the hub
-     checks every file's SHA-256 before installing). It patches the headset's own eye
-     model on-device. It supports one specific stock eye model, so on other firmware it
-     refuses to install.
-   - **Create my eye patch** — the fallback if Sergio's doesn't install or doesn't give
-     independent eyes. The hub reads this headset's own eye model, finds its eye-blend
-     gate from the model's structure, and builds a small Magisk module (`qpro_eye_patch`)
-     that patches your own copy on the headset, verifies it by SHA-256, mounts it at
-     boot and turns off the eye-tracking social filter. The gate patch is the default;
-     "exact rewire" is an experimental option not yet tested on a headset.
-   - **Advanced:** **Install module (.zip)** installs a module zip you downloaded
-     through Magisk's own installer after showing its `module.prop` details, and
-     **Choose installed** marks a module you already installed in the Magisk app.
-     Only install modules you trust, and run only one eye-model module at a time.
-
-   After installing, reboot the headset, re-apply root if your root method needs it,
-   and redo the headset's eye-tracking calibration. The hub never reboots the headset
-   for you.
-6. Start Virtual Desktop or Steam Link (or restart it), SteamVR, and VRCFT. Confirm
-   ordinary tracking works.
+   silently installs a private per-user copy plus OpenCV, NumPy, PyTorch, and ONNX
+   Runtime under `%LOCALAPPDATA%\QproFaceTracking\runtime`. If Python 3.12 is already
+   installed on your PC, setup uses it as the base for its own private environment
+   instead of touching your installation. It creates no launcher, shortcuts, file
+   associations, or PATH entries. PyTorch is a large download, but later release
+   folders reuse the same runtime. Setup uses PyTorch's official CUDA 12.8 wheel when
+   an NVIDIA driver/GPU is detected and the official CPU wheel otherwise.
+4. Close VRCFaceTracking, then select **Install VD bridge** (Virtual Desktop) or
+   **Install Steam Link bridge** (Steam Link, see [Steam Link](#steam-link)) in
+   step 2. Restart VRCFT.
+5. For eye convergence, connect the rooted headset and open **Manage eye module**
+   (step 3). The hub guides you through it; see [Eye convergence](#eye-convergence).
+6. Start Virtual Desktop or Steam Link, SteamVR, and VRCFT. Confirm ordinary tracking
+   works.
 7. Turn on tongue tracking if you want it, choose its settings, then press
-   **Apply and start selected**. Eye gaze runs from the eye module on the headset; Apply
-   checks it is active unless **Skip eye gaze (tongue only)** is on.
+   **Apply and start selected**.
 8. Press **Stop and restore stock** before disconnecting USB or closing the app.
 
-## Wireless (ADB over Wi-Fi)
-
-Pick the connection explicitly with the **USB / Wi-Fi** toggle at the top of the
-hub (default **USB**). Expect roughly 60–90 Mbit/s upstream for live tongue cameras,
-so a 5 GHz / Wi-Fi 6 network (ideally a dedicated VR access point) is recommended
-alongside Virtual Desktop. The PC and headset must be on the same network/router.
-
-1. **Pair once over USB.** With the headset connected by USB, select **Wi-Fi** at the
-   top and press **Enable / Connect Wi-Fi**. When the headset's IP address appears
-   under **Headset link**, you can unplug the cable.
-2. **Later sessions:** select **Wi-Fi** and press **Enable / Connect Wi-Fi**. The hub
-   reconnects to the saved address (or scans your local network) without a cable.
-3. Use tongue capture and **Apply and start selected** exactly as over USB. The hub
-   forwards the wireless target to the tracking and capture scripts automatically.
-
-ADB is reachable on your local network while wireless is enabled, so only use it on
-a trusted private network. `Disable-Wireless.bat` returns the headset to USB-only ADB.
-
-> The **USB / Wi-Fi** toggle is transport only — eye convergence comes from an
-> independent-eye Magisk module (Sergio's, our own eye patch, or one you supply); the
-> hub installs and detects it over either transport. No eye-tracking model is included
-> in this project. The original PC gaze runtime is no longer used by the hub. Tongue
-> tracking has no firmware dependency and works on either transport.
+Pick **USB** or **Wi-Fi** at the top of the hub. Everything works the same over
+either connection; see [Wireless](#wireless-adb-over-wi-fi).
 
 Tongue training automatically selects CUDA when PyTorch can access it and falls
 back to CPU instead of failing on systems without NVIDIA graphics. The
@@ -130,34 +82,89 @@ on ordinary PCs, but it can take substantially longer; full-dataset CPU training
 may take hours. Installing the CUDA-enabled PyTorch wheel does not replace the
 Windows NVIDIA display driver—the driver must already be installed and working.
 
+## Eye convergence
 
+Independent eyes come from a small Magisk module on the headset that patches the
+headset's own eye model and turns off the filter that ties the two eyes together. No
+Meta files are shipped or downloaded. **Manage eye module** (First-time setup step 3)
+always shows where you are and the recommended next step:
+
+1. **Install Sergio's module (recommended).** SergioMarquina's "Quest Pro Individual
+   Eye Enabler", bundled unmodified with his permission (`sergio-eye-module/`; the hub
+   checks every file's SHA-256 before installing). It supports one specific stock eye
+   model, which is used on the firmwares above.
+2. **Restart the headset.** After installing, the hub offers to restart the headset for
+   you. Please do: on some headsets (for example v2.6) Sergio's installer stops
+   controller tracking until the next restart. Re-apply root afterwards if your root
+   method needs that.
+3. **Automatic check.** After the restart the hub checks that the module really took
+   effect: the patched eye model is the one in use and the eye filter is off. The
+   status then shows **Convergence on**. You don't need to redo eye-tracking
+   calibration.
+4. **If it didn't work,** the hub says why (with an error code) and suggests the next
+   option: **Create my eye patch**. The hub reads this headset's own eye model, finds
+   its eye-blend gate from the model's structure, and builds a small Magisk module
+   (`qpro_eye_patch`) that patches your own copy on the headset, verifies it by
+   SHA-256 and mounts it at boot. The gate patch is the default; "exact rewire" is an
+   experimental alternative. If another module is still patching the model, the hub
+   offers to go back to stock first and continues after the restart.
+
+The hub remembers what was tried on your headset, so it doesn't suggest the same thing
+twice. If the checks pass but your avatar's eyes still move together, choose **My eyes
+still move together** and the hub moves on to the next option.
+
+- **Revert to stock** removes every recognized eye module. Magisk removes it during
+  the next restart (the hub offers to restart), and the hub confirms afterwards that
+  the stock eye model is back.
+- **Check now** re-runs the check at any time. **Restart headset** restarts it from the
+  hub (it always asks first).
+- Under **Advanced**: **Install module (.zip)** installs another module zip you
+  downloaded, after showing its `module.prop` details. **Choose installed** marks a
+  module you already installed in the Magisk app. Only install modules you trust, and
+  run only one eye-model module at a time.
+
+Install or change eye modules **before** starting Virtual Desktop; changing eye
+tracking while VD streams freezes VD's face feed until VD reconnects.
+
+## Wireless (ADB over Wi-Fi)
+
+Pick the connection with the **USB / Wi-Fi** toggle at the top of the hub (default
+**USB**). Expect roughly 60–90 Mbit/s upstream for live tongue cameras, so a 5 GHz /
+Wi-Fi 6 network (ideally a dedicated VR access point) is recommended alongside Virtual
+Desktop. The PC and headset must be on the same network/router.
+
+1. **Pair once over USB.** With the headset connected by USB, select **Wi-Fi** and
+   press **Enable / Connect Wi-Fi**. When the headset's IP address appears under
+   **Headset link**, you can unplug the cable.
+2. **Later sessions:** select **Wi-Fi** and press **Enable / Connect Wi-Fi**. The hub
+   reconnects to the saved address (or scans your local network) without a cable.
+3. Use tongue capture and **Apply and start selected** exactly as over USB.
+
+ADB is reachable on your local network while wireless is enabled, so only use it on
+a trusted private network. `Disable-Wireless.bat` returns the headset to USB-only ADB.
 
 ## Steam Link
 
-**Install Steam Link bridge** installs a bridge that reads Steam Link's OSC face and
-eye data instead of Virtual Desktop's. Tongue tracking works the same way as with
-Virtual Desktop.
+**Install Steam Link bridge** (step 2) installs a bridge that reads Steam Link's OSC
+face and eye data instead of Virtual Desktop's.
 
 - In Steam Link's advanced settings, turn on OSC and eye/face tracking sharing, and
   set the OSC output port to 9015 (Custom).
 - Only one bridge can be installed at a time. Each install button removes the other
   bridge. The Steam Link one also moves the LinkFT and SteamLink VRCFT modules into
   `research\`, because they use the same port.
-- Steam Link sends one gaze direction for both eyes, so **eye convergence (step 3)
-  only shows up through Virtual Desktop**. Face, blink and tongue tracking work the
-  same with either bridge.
-- The hub switches tongue **Visibility** to **Camera only** while the Steam Link bridge
-  is installed, because the weighted mode mixes in Virtual Desktop's native
-  TongueOut, which is always zero under Steam Link.
-- Tongue capture works with the Steam Link bridge installed: the bridge shares Steam
-  Link's face weights with the capture tool, so VRCFT must be running during capture.
+- Steam Link sends one gaze direction for both eyes, so **eye convergence only shows
+  up through Virtual Desktop**. Face, blink and tongue tracking work with either.
+- The hub switches tongue **Visibility** to **Camera only** while the Steam Link
+  bridge is installed, because Steam Link has no native TongueOut signal.
 
 ## Included profiles
 
 - `Developer-trained tongue model v8 (demo)` is trained on one person. It is useful
-  as an immediate bootstrap/demo, not a universal model. Quick refinement is
-  recommended for another wearer; false positives and blind spots remain possible
-  with different mouths, facial hair, clothing, and headset fit.
+  as an immediate bootstrap/demo and for checking that everything is set up and
+  tracking, not a universal model. Quick refinement is recommended for another
+  wearer; false positives and blind spots remain possible with different mouths,
+  facial hair, clothing, and headset fit.
 
 The hub discovers additional paired tongue files named
 `qpro-stereo-tongue-vN-gate.pt` and `qpro-stereo-tongue-vN-direction.pt`. Full or
@@ -176,16 +183,21 @@ On first launch it also copies complete personal tongue model pairs from an
 adjacent older release into the new release folder. The public package itself still
 contains only the developer v8 demonstration model.
 
-Capture currently requires Virtual Desktop or Steam Link tracking, SteamVR, and
-VRCFaceTracking to be running because the trainer records Quest Pro's native `TongueOut` confidence
-as an auxiliary visibility label. The hub checks these common prerequisites before
-opening the guided camera window and explains what is missing directly.
+Capture currently requires Virtual Desktop (or Steam Link) tracking, SteamVR, and
+VRCFaceTracking to be running because the trainer records Quest Pro's native
+`TongueOut` confidence as an auxiliary visibility label. The hub checks these common
+prerequisites before opening the guided camera window and explains what is missing
+directly.
 
 The **Tongue model manager** tab can rename, export, import, and delete personal
 paired models. Export produces one `.qptonguemodel` package containing both neural
 network checkpoints. Import assigns the next unused local version. Only import
 models from people you trust; PyTorch model files are executable data when loaded.
 The bundled developer v8 demo is protected from accidental deletion.
+
+Live tongue tracking converts the selected model once into an ONNX copy and runs it
+through ONNX Runtime + DirectML, which uses about 0.3 GB of RAM instead of ~1.1 GB.
+If that isn't available, it falls back to PyTorch automatically.
 
 ## Tongue controls
 
@@ -202,6 +214,30 @@ The bundled developer v8 demo is protected from accidental deletion.
   request a faster headset source cadence. On the tested Quest Pro, a 72 cap was
   stable but produced about 36 paired stereo samples per second; it does not imply
   72 completed tongue inferences per second.
+
+## Troubleshooting
+
+When something fails, the hub shows an error code (for example `QPRO-305`), what went
+wrong and what to do. The full output is in the **Activity** panel; please include the
+code and that text when you ask for help. The most common ones:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| QPRO-101 / 102 | Python setup problem | Repair or remove an existing Python 3.12, or re-extract the release |
+| QPRO-103 | Runtime download failed | Check the internet connection and free disk space, then press Install runtime again |
+| QPRO-201 | VRCFaceTracking is open | Close it (also from the tray) before installing a bridge |
+| QPRO-302 / 304 | Headset not found / USB debugging not allowed | Wake the headset and accept "Allow USB debugging" |
+| QPRO-305 | Root not granted | Magisk > Superuser > enable Shell; re-apply root after a restart |
+| QPRO-306 | Wi-Fi unreachable | Same network; connect USB once and press Enable / Connect Wi-Fi |
+| QPRO-502 | Sergio's module didn't patch this firmware | Use Create my eye patch |
+| QPRO-503 | Your eye patch is inactive | Rebuild it with Create my eye patch |
+| QPRO-509 | Headset didn't reconnect after a restart | Put it on so it finishes starting, then press Check now |
+| QPRO-602 | Training ran out of memory | Close GPU-heavy apps, or use Quick refinement |
+
+If a window looks cut off at your Windows display scaling, run
+`QproFaceTracking.exe --layout-check layout-report` from the release folder. It checks
+the layout at 100–200% scaling and saves screenshots plus a report into
+`layout-report\`; please attach them to a GitHub issue.
 
 ## Building from source and releasing
 
@@ -230,6 +266,9 @@ python -m unittest discover -p "test_*.py"
 # check that the hub compiles, then run it against this checkout
 dotnet build qpro-hub\QproFaceTracking.Hub.csproj -c Release
 .\qpro-hub\bin\Release\net10.0-windows\QproFaceTracking.Hub.exe --root .
+
+# check the hub's layout at 100-200% Windows scaling
+.\qpro-hub\bin\Release\net10.0-windows\QproFaceTracking.Hub.exe --root . --layout-check layout-report
 ```
 
 When run from source, the hub uses the scripts in the folder given by `--root`. For
