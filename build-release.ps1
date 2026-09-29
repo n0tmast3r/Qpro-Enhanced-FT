@@ -147,7 +147,27 @@ $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $root "artifacts\releas
 if (-not $releaseRoot.StartsWith($distRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Unsafe release target: $releaseRoot"
 }
-if (Test-Path -LiteralPath $releaseRoot) { Remove-Item -LiteralPath $releaseRoot -Recurse -Force }
+if (Test-Path -LiteralPath $releaseRoot) {
+    # A previous build of this version may still be in use: the hub started from it, or
+    # the adb server that hub launched (adb keeps running in the background after the hub
+    # closes). Windows won't delete a running .exe, so deal with those first.
+    $prefix = $releaseRoot.TrimEnd('\') + '\'
+    $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $path = $null
+        try { $path = $_.Path } catch { }
+        $path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($running | Where-Object { $_.ProcessName -like "QproFaceTracking*" }) {
+        throw "QproFaceTracking is still open from the previous build ($releaseRoot). Close it and run this again."
+    }
+    foreach ($process in $running) {
+        Write-Host "Stopping $($process.ProcessName) from the previous build so its folder can be replaced..."
+        if ($process.ProcessName -eq "adb") { try { & $process.Path kill-server *> $null } catch { } }
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($running.Count -gt 0) { Start-Sleep -Seconds 1 }
+    Remove-Item -LiteralPath $releaseRoot -Recurse -Force
+}
 if (Test-Path -LiteralPath $artifactRoot) { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $releaseRoot, $artifactRoot | Out-Null
 

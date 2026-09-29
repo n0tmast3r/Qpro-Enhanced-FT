@@ -109,6 +109,15 @@ class ReleaseBootstrapTests(unittest.TestCase):
         self.assertIn("[1.0f, 1.25f, 1.5f, 1.75f, 2.0f]", check)
         self.assertIn('"--layout-check"', hub)
 
+    def test_release_builder_replaces_a_build_that_is_still_in_use(self) -> None:
+        # The hub's adb server keeps running from the old dist folder after the hub closes,
+        # which made "Access to the path 'adb.exe' is denied" on the next build.
+        builder = (ROOT / "build-release.ps1").read_text(encoding="utf-8")
+        cleanup = builder.split("if (Test-Path -LiteralPath $releaseRoot) {", 1)[1].split("Remove-Item -LiteralPath $releaseRoot -Recurse -Force", 1)[0]
+        self.assertIn("kill-server", cleanup)
+        self.assertIn("Stop-Process", cleanup)
+        self.assertIn("QproFaceTracking is still open", cleanup)
+
 
 if __name__ == "__main__":
     unittest.main()
