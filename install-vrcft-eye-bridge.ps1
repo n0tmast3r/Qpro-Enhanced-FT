@@ -10,6 +10,7 @@ $officialId = "91a90618-b020-4064-8832-809b2ca2b3bc"
 $officialPath = Join-Path $customLibs $officialId
 $officialBackup = Join-Path $root "research\vrcft-official-virtual-desktop-backup"
 $destination = Join-Path $customLibs "000-Qpro.IndependentGaze.dll"
+$steamLinkBridge = Join-Path $customLibs "000-Qpro.SteamLinkBridge.dll"
 
 if (Get-Process -Name "VRCFaceTracking" -ErrorAction SilentlyContinue) {
     throw "Close VRCFaceTracking before installing the combined independent-gaze + Virtual Desktop face bridge."
@@ -41,6 +42,11 @@ if (Test-Path -LiteralPath $officialPath) {
     }
     Move-Item -LiteralPath $officialPath -Destination $officialBackup
     Write-Host "Moved the conflicting official Virtual Desktop module to $officialBackup"
+}
+# Only one Qpro bridge can own the gaze and tongue ports.
+if (Test-Path -LiteralPath $steamLinkBridge) {
+    Remove-Item -LiteralPath $steamLinkBridge -Force
+    Write-Host "Removed the Steam Link bridge; use Install Steam Link bridge to switch back."
 }
 Copy-Item -LiteralPath $source -Destination $destination -Force
 $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash

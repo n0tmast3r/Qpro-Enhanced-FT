@@ -48,6 +48,76 @@ class ReleaseBootstrapTests(unittest.TestCase):
         ):
             self.assertIn(expected, hub)
 
+    def test_existing_python_312_is_reused_instead_of_modified(self) -> None:
+        # Issue #1: the python.org installer modifies an existing per-user 3.12
+        # instead of creating the private copy, so setup must look for one first.
+        source = (ROOT / "setup-runtime.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Find-ExistingPython312", source)
+        self.assertIn("Software\\Python\\PythonCore\\3.12\\InstallPath", source)
+        self.assertIn("WindowsApps", source)
+        self.assertIn("sys.version_info[:2] == (3, 12)", source)
+        detect = source.index("($existingPython = Find-ExistingPython312)")
+        install = source.index("Start-Process -FilePath $bundledPythonInstaller")
+        self.assertLess(detect, install, "existing Python must be checked before running the installer")
+        after_install = source[install:]
+        self.assertIn("Find-ExistingPython312", after_install, "installer 'success' without python.exe must fall back")
+        self.assertIn("no longer starts", source, "a venv whose base Python was removed must be rebuilt")
+
+    def test_setup_cards_size_to_content(self) -> None:
+        # Issue #6: fixed-height setup rows clipped the Install buttons at high DPI.
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        self.assertNotIn("firstRun.RowStyles.Add(new RowStyle(SizeType.Absolute", hub)
+        start = hub.index("private static Control SetupStepCard(")
+        card = hub[start:hub.index("private static Control WorkflowCard(", start)]
+        self.assertIn("AutoSize = true", card)
+        self.assertNotIn("SizeType.Absolute", card)
+        self.assertIn("var setupActions = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true", hub)
+
+    def test_release_builder_is_self_sufficient_and_keeps_the_v8_model(self) -> None:
+        builder = (ROOT / "build-release.ps1").read_text(encoding="utf-8")
+        for asset in ("models\\qpro-stereo-tongue-v8-gate.pt", "models\\qpro-stereo-tongue-v8-direction.pt",
+                      "platform-tools\\adb.exe", "python-runtime\\python-3.12.10-amd64.exe",
+                      "questpro-camera-injector"):
+            self.assertIn(f'"{asset}"', builder)
+        self.assertIn("release-assets", builder)
+        self.assertIn("SHA256SUMS.txt", builder)
+        self.assertIn("--self-test", builder)
+        self.assertIn("release-manifest.json", builder)
+        self.assertIn("release-assets/", (ROOT / ".gitignore").read_text(encoding="utf-8"))
+
+    def test_hub_title_shows_the_manifest_version(self) -> None:
+        import json
+        manifest = json.loads((ROOT / "release-manifest.json").read_text(encoding="utf-8"))
+        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+")
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        self.assertNotIn("Proof of Concept", hub)
+        self.assertIn('"QproFaceTracking " + AppVersionLabel()', hub)
+        self.assertIn("Qpro.SteamLinkBridge.dll", hub[:hub.index("class HubForm")])
+
+    def test_layout_scales_with_windows_display_scaling(self) -> None:
+        hub = (ROOT / "qpro-hub" / "Program.cs").read_text(encoding="utf-8")
+        # No fixed page height: the page grows with its content and the window scrolls.
+        self.assertNotIn("Height = 1345", hub)
+        self.assertIn("var page = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true", hub)
+        # Dialogs scale like the main window (they used to stay at 100% while text grew).
+        dialog = hub.split("private static void StyleDialog(Form dialog, string title)", 1)[1].split("private static TableLayoutPanel DialogLayout()", 1)[0]
+        self.assertIn("dialog.AutoScaleMode = AutoScaleMode.Dpi;", dialog)
+        prompt = hub.split("internal sealed class TextPromptDialog : Form", 1)[1].split("internal sealed class DarkSlider", 1)[0]
+        self.assertIn("AutoScaleMode = AutoScaleMode.Dpi;", prompt)
+        # A built-in check lays everything out at 100-200% and reports clipping.
+        check = (ROOT / "qpro-hub" / "LayoutCheck.cs").read_text(encoding="utf-8")
+        self.assertIn("[1.0f, 1.25f, 1.5f, 1.75f, 2.0f]", check)
+        self.assertIn('"--layout-check"', hub)
+
+    def test_release_builder_replaces_a_build_that_is_still_in_use(self) -> None:
+        # The hub's adb server keeps running from the old dist folder after the hub closes,
+        # which made "Access to the path 'adb.exe' is denied" on the next build.
+        builder = (ROOT / "build-release.ps1").read_text(encoding="utf-8")
+        cleanup = builder.split("if (Test-Path -LiteralPath $releaseRoot) {", 1)[1].split("Remove-Item -LiteralPath $releaseRoot -Recurse -Force", 1)[0]
+        self.assertIn("kill-server", cleanup)
+        self.assertIn("Stop-Process", cleanup)
+        self.assertIn("QproFaceTracking is still open", cleanup)
+
 
 if __name__ == "__main__":
     unittest.main()

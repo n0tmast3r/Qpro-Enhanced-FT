@@ -1,0 +1,6 @@
+id=qpro_individual_eye_enabler
+name=Quest Pro Individual Eye Enabler
+version=v1.0.0
+versionCode=1
+author=SergioMarquina
+description=Patches the original model and enables hidden system props (debug.oculus.eye_tracking props) to enable individual eye tracking

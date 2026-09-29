@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import http.server
+import os
 import socket
 import struct
 import sys
@@ -14,6 +15,11 @@ import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# numpy's OpenBLAS commits a 32 MB buffer per CPU thread when it is imported
+# (~0.5 GB on a 16-thread CPU). The receiver's numpy work is tiny, so one
+# thread is plenty. This must run before numpy/cv2 are imported.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import cv2
 import numpy as np

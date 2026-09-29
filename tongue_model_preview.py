@@ -3,18 +3,25 @@
 
 from __future__ import annotations
 
+import json
 import time
 import socket
 import struct
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
-import torch
 
-from train_tongue_model import create_model
+from export_tongue_onnx import ONNX_FORMAT, checkpoint_digest, onnx_path
+
+# PyTorch is imported only on the fallback path. Normally each checkpoint's
+# ONNX twin runs through ONNX Runtime + DirectML, so the live receiver never
+# loads PyTorch/CUDA (~1.1 GB -> ~0.3 GB resident, far less CPU per frame).
 
 
 TONGUE_PACKET = struct.Struct("<4sBBH12f")
@@ -127,6 +134,121 @@ class TonguePrediction:
     dropped_frames: int = 0
 
 
+@dataclass(frozen=True)
+class _LoadedModel:
+    infer: Callable[[np.ndarray], np.ndarray]  # (1, 2, S, S) float32 -> head values
+    target_names: list[str]
+    image_size: int
+    visibility_gate: dict
+
+
+class _DirectMLUnavailable(Exception):
+    """DirectML cannot run on this PC; converting the model again would not help."""
+
+
+def _directml_options(ort) -> object:
+    options = ort.SessionOptions()
+    # DirectML requires sequential execution without memory-pattern planning.
+    options.enable_mem_pattern = False
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    # The GPU does the work; a single non-spinning CPU thread keeps CPU use low.
+    options.intra_op_num_threads = 1
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.log_severity_level = 3
+    return options
+
+
+def _open_onnx_twin(ort, checkpoint: Path, digest: str) -> _LoadedModel | None:
+    """The checkpoint's current ONNX twin on DirectML, or None if missing/stale."""
+    target = onnx_path(checkpoint)
+    if not target.exists():
+        return None
+    try:
+        session = ort.InferenceSession(
+            str(target), _directml_options(ort),
+            providers=[("DmlExecutionProvider", {"performance_preference": "high_performance"})],
+        )
+    except Exception:  # noqa: BLE001 - an unreadable twin is simply converted again
+        return None
+    if "DmlExecutionProvider" not in session.get_providers():
+        raise _DirectMLUnavailable("DirectML did not initialize")
+    metadata = session.get_modelmeta().custom_metadata_map
+    if (metadata.get("qproTongueOnnxFormat") != ONNX_FORMAT
+            or metadata.get("sourceSha256") != digest):
+        return None
+    input_name = session.get_inputs()[0].name
+
+    def infer(cameras: np.ndarray) -> np.ndarray:
+        return session.run(None, {input_name: cameras})[0][0]
+
+    return _LoadedModel(
+        infer,
+        json.loads(metadata["targetNames"]),
+        int(metadata["imageSize"]),
+        json.loads(metadata.get("visibilityGate", "{}")),
+    )
+
+
+def _convert_to_onnx(checkpoints: list[Path]) -> bool:
+    """Convert in a short-lived helper so this process never imports PyTorch."""
+    script = Path(__file__).with_name("export_tongue_onnx.py")
+    names = ", ".join(checkpoint.name for checkpoint in checkpoints)
+    print(f"Preparing {names} for DirectML (one-time conversion)...", flush=True)
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script), *map(str, checkpoints)], timeout=300
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"ONNX conversion did not finish: {error}", flush=True)
+        return False
+    return completed.returncode == 0
+
+
+def _load_directml_models(checkpoints: list[Path]) -> list[_LoadedModel] | None:
+    """DirectML models for every checkpoint (converting as needed), or None."""
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return None
+    if "DmlExecutionProvider" not in ort.get_available_providers():
+        return None
+    digests = [checkpoint_digest(checkpoint) for checkpoint in checkpoints]
+    try:
+        models = [_open_onnx_twin(ort, c, d) for c, d in zip(checkpoints, digests)]
+        stale = [c for c, model in zip(checkpoints, models) if model is None]
+        if stale:
+            if not _convert_to_onnx(stale):
+                return None
+            models = [
+                model or _open_onnx_twin(ort, c, d)
+                for c, d, model in zip(checkpoints, digests, models)
+            ]
+    except _DirectMLUnavailable as error:
+        print(f"DirectML is unavailable ({error}); using PyTorch.", flush=True)
+        return None
+    return models if all(model is not None for model in models) else None
+
+
+def _load_torch_model(checkpoint: Path, device) -> _LoadedModel:
+    import torch
+
+    from train_tongue_model import create_model
+
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    target_names = list(state["targetNames"])
+    model = create_model(str(state.get("architecture", "legacy-late-fusion-v1")), target_names)
+    model.load_state_dict(state["modelState"])
+    model.to(device).eval()
+
+    def infer(cameras: np.ndarray) -> np.ndarray:
+        with torch.inference_mode():
+            return model(torch.from_numpy(cameras).to(device))[0].float().cpu().numpy()
+
+    return _LoadedModel(
+        infer, target_names, int(state["imageSize"]), state.get("visibilityGate", {})
+    )
+
+
 class LiveTongueModelPreview:
     def __init__(
         self,
@@ -138,39 +260,44 @@ class LiveTongueModelPreview:
         camera_weight: float | None = None,
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path).resolve()
-        if device_name == "auto":
-            device_name = "cuda:0" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device_name)
-        checkpoint = torch.load(self.checkpoint_path, map_location="cpu", weights_only=False)
-        self.target_names = list(checkpoint["targetNames"])
-        self.image_size = int(checkpoint["imageSize"])
-        self.architecture = str(checkpoint.get("architecture", "legacy-late-fusion-v1"))
-        self.model = create_model(self.architecture, self.target_names)
-        self.model.load_state_dict(checkpoint["modelState"])
-        self.model.to(self.device).eval()
-        self.direction_checkpoint_path: Path | None = None
-        self.direction_model = None
+        self.direction_checkpoint_path = (
+            Path(direction_checkpoint_path).resolve() if direction_checkpoint_path else None
+        )
+        checkpoints = [self.checkpoint_path]
+        if self.direction_checkpoint_path is not None:
+            checkpoints.append(self.direction_checkpoint_path)
+        # "auto" prefers the ONNX twins on DirectML (same outputs, no PyTorch in
+        # this process) and otherwise falls back to PyTorch on CUDA, else CPU.
+        # "dml" requires DirectML; "cuda:0"/"cpu" keep the PyTorch path. Both
+        # ensemble halves always share one backend.
+        models = None
+        if device_name in ("auto", "dml"):
+            models = _load_directml_models(checkpoints)
+            if models is None and device_name == "dml":
+                raise RuntimeError("DirectML tongue inference is unavailable on this PC.")
+        if models is not None:
+            self.device = "DirectML (ONNX Runtime)"
+        else:
+            import torch
+
+            if device_name in ("auto", "dml"):
+                device_name = "cuda:0" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(device_name)
+            models = [_load_torch_model(checkpoint, self.device) for checkpoint in checkpoints]
+        gate_model = models[0]
+        self.target_names = gate_model.target_names
+        self.image_size = gate_model.image_size
+        self._infer_gate = gate_model.infer
+        self._infer_direction: Callable[[np.ndarray], np.ndarray] | None = None
         self.direction_image_size = self.image_size
-        if direction_checkpoint_path:
-            self.direction_checkpoint_path = Path(direction_checkpoint_path).resolve()
-            direction_checkpoint = torch.load(
-                self.direction_checkpoint_path, map_location="cpu", weights_only=False
-            )
-            direction_names = list(direction_checkpoint["targetNames"])
-            if direction_names != self.target_names:
+        if len(models) > 1:
+            if models[1].target_names != self.target_names:
                 raise ValueError(
                     "Visibility and direction checkpoints use different target schemas"
                 )
-            direction_architecture = str(
-                direction_checkpoint.get("architecture", "legacy-late-fusion-v1")
-            )
-            self.direction_image_size = int(direction_checkpoint["imageSize"])
-            self.direction_model = create_model(
-                direction_architecture, self.target_names
-            )
-            self.direction_model.load_state_dict(direction_checkpoint["modelState"])
-            self.direction_model.to(self.device).eval()
-        gate = checkpoint.get("visibilityGate", {})
+            self._infer_direction = models[1].infer
+            self.direction_image_size = models[1].image_size
+        gate = gate_model.visibility_gate
         self.camera_weight = float(
             gate.get("cameraWeight", 0.5) if camera_weight is None else camera_weight
         )
@@ -182,14 +309,15 @@ class LiveTongueModelPreview:
         self._smoothed: np.ndarray | None = None
         self._visible_latched = False
 
-    def _inputs(self, strip: np.ndarray, image_size: int) -> torch.Tensor:
+    @staticmethod
+    def _inputs(strip: np.ndarray, image_size: int) -> np.ndarray:
         cameras = np.empty((1, 2, image_size, image_size), dtype=np.float32)
         for view in range(2):
             panel = strip[:, view * 400:(view + 1) * 400]
             cameras[0, view] = cv2.resize(
                 panel, (image_size, image_size), interpolation=cv2.INTER_AREA
             ).astype(np.float32) / 255.0
-        return torch.from_numpy(cameras).to(self.device)
+        return cameras
 
     def predict(
         self,
@@ -203,24 +331,15 @@ class LiveTongueModelPreview:
                 f"or 400x1200 face strip, got {strip.shape}"
             )
         inputs = self._inputs(strip, self.image_size)
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
         started = time.perf_counter()
-        with torch.inference_mode():
-            values = self.model(inputs)[0].float().cpu().numpy()
-            if self.direction_model is not None:
-                gate_visibility = float(
-                    values[self.target_names.index("visibility")]
-                )
-                direction_inputs = self._inputs(strip, self.direction_image_size)
-                direction_values = (
-                    self.direction_model(direction_inputs)[0].float().cpu().numpy()
-                )
-                visibility_index = self.target_names.index("visibility")
-                values = direction_values
-                values[visibility_index] = gate_visibility
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
+        values = self._infer_gate(inputs)
+        if self._infer_direction is not None:
+            visibility_index = self.target_names.index("visibility")
+            gate_visibility = float(values[visibility_index])
+            values = self._infer_direction(
+                self._inputs(strip, self.direction_image_size)
+            )
+            values[visibility_index] = gate_visibility
         inference_ms = (time.perf_counter() - started) * 1000.0
         self._smoothed = (
             values
